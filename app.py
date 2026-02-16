@@ -343,6 +343,7 @@ def render_chapter_table(data):
                     save_data(data)
                     st.success("Chapter added.")
                     st.session_state["show_add_chapter"] = False
+                    st.rerun()
 
     headers = [
         "Chapter Name",
@@ -413,6 +414,7 @@ def render_chapter_table(data):
                         save_data(data)
                         st.success("Chapter updated.")
                         st.session_state["edit_chapter"] = None
+                        st.rerun()
 
             if st.button("Delete", key=f"delete_{chapter_name}"):
                 st.session_state["delete_chapter"] = chapter_name
@@ -426,6 +428,7 @@ def render_chapter_table(data):
                 st.success("Chapter deleted.")
                 st.session_state["delete_chapter"] = None
                 st.session_state["edit_chapter"] = None
+                st.rerun()
             if confirm_cols[1].button("Cancel", key=f"cancel_delete_{chapter_name}"):
                 st.session_state["delete_chapter"] = None
 
@@ -477,6 +480,7 @@ def main():
                 record_lecture(chapter, int(lectures))
                 save_data(data)
                 st.success("Lecture count updated.")
+                st.rerun()
 
     with tabs[2]:
         st.subheader("Log Practice")
@@ -511,6 +515,7 @@ def main():
                 set_next_practice_date(chapter, accuracy)
                 save_data(data)
                 st.success(f"Logged session. Accuracy: {accuracy}%")
+                st.rerun()
 
     with tabs[3]:
         render_maintenance_view(data)
