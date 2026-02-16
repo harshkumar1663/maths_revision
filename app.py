@@ -360,7 +360,7 @@ def render_chapter_table(data):
     ]
     header_cols = st.columns(len(headers))
     for col, label in zip(header_cols, headers):
-        col.write(label)
+        col.markdown(f"<span style='font-weight:600;color:#374151;'>{label}</span>", unsafe_allow_html=True)
 
     for chapter in data["chapters"]:
         chapter_name = chapter["chapter_name"]
@@ -433,6 +433,21 @@ def render_chapter_table(data):
 def main():
     st.set_page_config(page_title="SSC Maths & Reasoning Practice Tracker", layout="wide")
     st.title("SSC Maths & Reasoning Practice Tracker")
+    st.markdown(
+        """
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600&family=Source+Serif+4:wght@500;600&display=swap');
+        html, body, [class*="stApp"] {
+            font-family: 'Source Sans 3', sans-serif;
+            color: #0f172a;
+        }
+        h1, h2, h3 {
+            font-family: 'Source Serif 4', serif;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
     data = load_data()
     updated = False
