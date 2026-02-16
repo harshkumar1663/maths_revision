@@ -11,23 +11,25 @@ BRANCH = "main"
 
 
 def today_str():
-    return date.today().isoformat()
+    return date.today().strftime("%d-%m-%y")
 
 
 def parse_date(value):
     if not value:
         return None
-    try:
-        return datetime.strptime(value, "%Y-%m-%d").date()
-    except ValueError:
-        return None
+    for fmt in ("%d-%m-%y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(value, fmt).date()
+        except ValueError:
+            continue
+    return None
 
 
 def format_date(value):
     if not value:
         return "-"
     if isinstance(value, date):
-        return value.isoformat()
+        return value.strftime("%d-%m-%y")
     return str(value)
 
 
@@ -229,11 +231,11 @@ def set_next_practice_date(chapter, accuracy):
             chapter["maintenance_stage"] = 2
         else:
             next_date = None
-        chapter["next_practice_date"] = next_date.isoformat() if next_date else None
+        chapter["next_practice_date"] = next_date.strftime("%d-%m-%y") if next_date else None
         return
     next_days = spacing_days(accuracy)
     next_date = date.today() + timedelta(days=next_days)
-    chapter["next_practice_date"] = next_date.isoformat()
+    chapter["next_practice_date"] = next_date.strftime("%d-%m-%y")
 
 
 def sort_chapters(data):
