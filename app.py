@@ -48,6 +48,35 @@ def empty_data():
     return {"chapters": []}
 
 
+def ensure_chapter_fields(chapter):
+    changed = False
+    defaults = {
+        "chapter_name": "",
+        "total_lectures_watched": 0,
+        "practice_sessions": [],
+        "status": "learning",
+        "next_practice_date": None,
+        "current_sheet_index": 0,
+        "lecture_dates": [],
+        "first_lecture_date": None,
+        "maintenance_stage": 0,
+        "subject": "Maths",
+        "sheet_total": 0,
+        "questions_completed_total": 0,
+    }
+    for key, value in defaults.items():
+        if key not in chapter or chapter[key] is None:
+            chapter[key] = value
+            changed = True
+    if not chapter.get("subject"):
+        chapter["subject"] = "Maths"
+        changed = True
+    if not isinstance(chapter.get("practice_sessions"), list):
+        chapter["practice_sessions"] = []
+        changed = True
+    return changed
+
+
 def load_data():
     owner, token = get_github_config()
     if not token:
@@ -98,6 +127,7 @@ def get_chapter(data, name):
 def ensure_chapter(data, name):
     existing = get_chapter(data, name)
     if existing:
+        ensure_chapter_fields(existing)
         return existing
     chapter = {
         "chapter_name": name,
@@ -109,6 +139,9 @@ def ensure_chapter(data, name):
         "lecture_dates": [],
         "first_lecture_date": None,
         "maintenance_stage": 0,
+        "subject": "Maths",
+        "sheet_total": 0,
+        "questions_completed_total": 0,
     }
     data["chapters"].append(chapter)
     return chapter
@@ -157,24 +190,36 @@ def spacing_days(accuracy):
     return 2
 
 
+def sheet_progress(chapter):
+    sheet_total = int(chapter.get("sheet_total", 0) or 0)
+    completed = int(chapter.get("questions_completed_total", 0) or 0)
+    if sheet_total <= 0:
+        return 0.0
+    return min(completed / sheet_total, 1.0)
+
+
+def sheet_completed(chapter):
+    sheet_total = int(chapter.get("sheet_total", 0) or 0)
+    completed = int(chapter.get("questions_completed_total", 0) or 0)
+    return sheet_total > 0 and completed >= sheet_total
+
+
 def update_status_after_session(chapter, accuracy):
     sessions = chapter["practice_sessions"]
     if chapter["status"] == "maintenance" and accuracy < 65:
         chapter["status"] = "active"
         chapter["maintenance_stage"] = 0
         return
-    if len(sessions) >= 3:
-        recent = sessions[-3:]
-        if all(s["accuracy"] >= 80 for s in recent) and len(sessions) <= 4:
-            chapter["status"] = "maintenance"
-            chapter["maintenance_stage"] = 0
-            return
+    if len(sessions) >= 3 and accuracy >= 80 and sheet_progress(chapter) >= 0.7:
+        chapter["status"] = "maintenance"
+        chapter["maintenance_stage"] = 0
+        return
     if chapter["status"] == "learning":
         chapter["status"] = "active"
 
 
 def set_next_practice_date(chapter, accuracy):
-    if chapter["status"] == "maintenance":
+    if chapter["status"] == "maintenance" and sheet_completed(chapter):
         stage = chapter.get("maintenance_stage", 0)
         if stage == 0:
             next_date = date.today() + timedelta(days=15)
@@ -264,14 +309,141 @@ def render_maintenance_view(data):
         )
 
 
+def render_chapter_table(data):
+    st.subheader("Chapter Table")
+    if "show_add_chapter" not in st.session_state:
+        st.session_state["show_add_chapter"] = False
+    if "edit_chapter" not in st.session_state:
+        st.session_state["edit_chapter"] = None
+    if "delete_chapter" not in st.session_state:
+        st.session_state["delete_chapter"] = None
+
+    if st.button("➕ Add Chapter"):
+        st.session_state["show_add_chapter"] = True
+
+    if st.session_state.get("show_add_chapter"):
+        with st.form("add_chapter_form", clear_on_submit=True):
+            new_name = st.text_input("Chapter name")
+            new_subject = st.selectbox("Subject", ["Maths", "Reasoning"])
+            new_sheet_total = st.number_input("Sheet size", min_value=1, step=1)
+            new_lectures = st.number_input("Lectures watched", min_value=0, max_value=10, step=1)
+            submitted = st.form_submit_button("Add")
+            if submitted:
+                if not new_name.strip():
+                    st.error("Chapter name is required.")
+                elif get_chapter(data, new_name.strip()):
+                    st.error("Chapter already exists.")
+                else:
+                    chapter = ensure_chapter(data, new_name.strip())
+                    chapter["subject"] = new_subject
+                    chapter["sheet_total"] = int(new_sheet_total)
+                    chapter["questions_completed_total"] = 0
+                    chapter["total_lectures_watched"] = int(new_lectures)
+                    sort_chapters(data)
+                    save_data(data)
+                    st.success("Chapter added.")
+                    st.session_state["show_add_chapter"] = False
+
+    headers = [
+        "Chapter Name",
+        "Subject",
+        "Status",
+        "Lectures Watched",
+        "Sheet Size",
+        "Questions Solved",
+        "Remaining",
+        "Sheet Progress %",
+        "Last Accuracy",
+        "Sessions Done",
+        "Next Practice Date",
+        "Actions",
+    ]
+    header_cols = st.columns(len(headers))
+    for col, label in zip(header_cols, headers):
+        col.write(label)
+
+    for chapter in data["chapters"]:
+        chapter_name = chapter["chapter_name"]
+        last_accuracy = chapter["practice_sessions"][-1]["accuracy"] if chapter["practice_sessions"] else None
+        next_date = parse_date(chapter.get("next_practice_date"))
+        sheet_total = int(chapter.get("sheet_total", 0) or 0)
+        completed = int(chapter.get("questions_completed_total", 0) or 0)
+        remaining = max(sheet_total - completed, 0)
+        progress_pct = round(sheet_progress(chapter) * 100, 2)
+        row_cols = st.columns(len(headers))
+        row_cols[0].write(chapter_name)
+        row_cols[1].write(chapter.get("subject", "Maths"))
+        row_cols[2].write(chapter.get("status", "learning"))
+        row_cols[3].write(chapter.get("total_lectures_watched", 0))
+        row_cols[4].write(sheet_total)
+        row_cols[5].write(completed)
+        row_cols[6].write(remaining)
+        row_cols[7].write(progress_pct)
+        row_cols[8].write(last_accuracy if last_accuracy is not None else "-")
+        row_cols[9].write(len(chapter.get("practice_sessions", [])))
+        row_cols[10].write(format_date(next_date))
+
+        action_cols = row_cols[11].columns(2)
+        if action_cols[0].button("Edit", key=f"edit_{chapter_name}"):
+            st.session_state["edit_chapter"] = chapter_name
+        if action_cols[1].button("Delete", key=f"delete_{chapter_name}"):
+            st.session_state["delete_chapter"] = chapter_name
+
+        if st.session_state.get("edit_chapter") == chapter_name:
+            with st.form(f"edit_form_{chapter_name}"):
+                edit_name = st.text_input("Chapter name", value=chapter_name)
+                edit_subject = st.selectbox("Subject", ["Maths", "Reasoning"],
+                                           index=0 if chapter.get("subject") == "Maths" else 1)
+                edit_sheet_total = st.number_input("Sheet size", min_value=1, step=1,
+                                                   value=max(sheet_total, 1))
+                edit_lectures = st.number_input("Lectures watched", min_value=0, max_value=999, step=1,
+                                                value=int(chapter.get("total_lectures_watched", 0)))
+                edit_questions = st.number_input("Questions solved correction", min_value=0, step=1,
+                                                 value=completed)
+                saved = st.form_submit_button("Save")
+                if saved:
+                    if not edit_name.strip():
+                        st.error("Chapter name is required.")
+                    elif edit_name.strip() != chapter_name and get_chapter(data, edit_name.strip()):
+                        st.error("Chapter already exists.")
+                    else:
+                        chapter["chapter_name"] = edit_name.strip()
+                        chapter["subject"] = edit_subject
+                        chapter["sheet_total"] = int(edit_sheet_total)
+                        chapter["total_lectures_watched"] = int(edit_lectures)
+                        chapter["questions_completed_total"] = int(edit_questions)
+                        sort_chapters(data)
+                        save_data(data)
+                        st.success("Chapter updated.")
+                        st.session_state["edit_chapter"] = None
+
+        if st.session_state.get("delete_chapter") == chapter_name:
+            st.warning(f"Delete '{chapter_name}'? This cannot be undone.")
+            confirm_cols = st.columns(2)
+            if confirm_cols[0].button("Confirm Delete", key=f"confirm_delete_{chapter_name}"):
+                data["chapters"] = [c for c in data["chapters"] if c["chapter_name"] != chapter_name]
+                save_data(data)
+                st.success("Chapter deleted.")
+                st.session_state["delete_chapter"] = None
+                st.session_state["edit_chapter"] = None
+            if confirm_cols[1].button("Cancel", key=f"cancel_delete_{chapter_name}"):
+                st.session_state["delete_chapter"] = None
+
+
 def main():
     st.set_page_config(page_title="SSC Maths & Reasoning Practice Tracker", layout="wide")
     st.title("SSC Maths & Reasoning Practice Tracker")
 
     data = load_data()
+    updated = False
+    for chapter in data["chapters"]:
+        if ensure_chapter_fields(chapter):
+            updated = True
+    if updated:
+        save_data(data)
     sort_chapters(data)
 
-    tabs = st.tabs(["Dashboard", "Add / Update Lecture", "Log Practice", "Maintenance View"])
+    tabs = st.tabs(["Dashboard", "Add / Update Lecture", "Log Practice", "Maintenance View", "Chapter Table"])
 
     with tabs[0]:
         render_dashboard(data)
@@ -318,6 +490,7 @@ def main():
                         "notes": notes.strip() or None,
                     }
                 )
+                chapter["questions_completed_total"] = int(chapter.get("questions_completed_total", 0) or 0) + int(questions)
                 chapter["current_sheet_index"] = chapter.get("current_sheet_index", 0) + 1
                 update_status_after_session(chapter, accuracy)
                 set_next_practice_date(chapter, accuracy)
@@ -326,6 +499,9 @@ def main():
 
     with tabs[3]:
         render_maintenance_view(data)
+
+    with tabs[4]:
+        render_chapter_table(data)
 
 
 if __name__ == "__main__":
