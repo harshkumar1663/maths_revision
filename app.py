@@ -383,11 +383,8 @@ def render_chapter_table(data):
         row_cols[9].write(len(chapter.get("practice_sessions", [])))
         row_cols[10].write(format_date(next_date))
 
-        action_cols = row_cols[11].columns(2)
-        if action_cols[0].button("Edit", key=f"edit_{chapter_name}"):
+        if row_cols[11].button("✏️", key=f"edit_{chapter_name}"):
             st.session_state["edit_chapter"] = chapter_name
-        if action_cols[1].button("Delete", key=f"delete_{chapter_name}"):
-            st.session_state["delete_chapter"] = chapter_name
 
         if st.session_state.get("edit_chapter") == chapter_name:
             with st.form(f"edit_form_{chapter_name}"):
@@ -416,6 +413,9 @@ def render_chapter_table(data):
                         save_data(data)
                         st.success("Chapter updated.")
                         st.session_state["edit_chapter"] = None
+
+            if st.button("Delete", key=f"delete_{chapter_name}"):
+                st.session_state["delete_chapter"] = chapter_name
 
         if st.session_state.get("delete_chapter") == chapter_name:
             st.warning(f"Delete '{chapter_name}'? This cannot be undone.")
