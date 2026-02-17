@@ -151,13 +151,33 @@ def ensure_chapter(data, name):
 
 def record_lecture(chapter, lectures):
     if lectures <= 0:
-        return
+        return False
     chapter["total_lectures_watched"] += lectures
     today = today_str()
     if today not in chapter.get("lecture_dates", []):
         chapter.setdefault("lecture_dates", []).append(today)
     if not chapter.get("first_lecture_date"):
         chapter["first_lecture_date"] = today
+    return True
+
+
+def adjust_next_practice_for_lecture(chapter, lecture_logged):
+    if not lecture_logged:
+        return
+    if chapter.get("status") not in ("learning", "active"):
+        return
+    next_date = parse_date(chapter.get("next_practice_date"))
+    if not next_date:
+        return
+    today = date.today()
+    days_until = (next_date - today).days
+    if days_until <= 3:
+        return
+    shift_days = 2 if days_until >= 5 else 1
+    tightened = next_date - timedelta(days=shift_days)
+    if tightened < today:
+        tightened = today
+    chapter["next_practice_date"] = tightened.strftime("%d-%m-%y")
 
 
 def has_consecutive_lecture_days(chapter):
@@ -479,7 +499,8 @@ def main():
                 st.error("Chapter name is required.")
             else:
                 chapter = ensure_chapter(data, chapter_name)
-                record_lecture(chapter, int(lectures))
+                lecture_logged = record_lecture(chapter, int(lectures))
+                adjust_next_practice_for_lecture(chapter, lecture_logged)
                 save_data(data)
                 st.success("Lecture count updated.")
                 st.rerun()
@@ -490,14 +511,11 @@ def main():
             st.info("Add a chapter first.")
         else:
             chapter_name = st.selectbox("Chapter", [c["chapter_name"] for c in data["chapters"]])
-            questions = st.number_input("Questions attempted", min_value=1, max_value=50, value=15, step=1)
-            correct = st.number_input("Correct answers", min_value=0, max_value=50, value=10, step=1)
+            questions = st.number_input("Questions attempted", min_value=1, value=15, step=1)
+            correct = st.number_input("Correct answers", min_value=0, value=10, step=1)
             notes = st.text_area("Notes (optional)")
             if st.button("Log session"):
                 chapter = get_chapter(data, chapter_name)
-                if questions < 15 or questions > 25:
-                    st.warning("Practice sessions should be 15-25 questions.")
-                    st.stop()
                 if correct > questions:
                     st.error("Correct answers cannot exceed questions attempted.")
                     st.stop()
