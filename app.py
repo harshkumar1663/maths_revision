@@ -429,7 +429,7 @@ def render_practice_history(chapter):
         notes_value = session.get("notes") or "No notes added."
         st.markdown(
             f"""
-            <div class='history-card'>
+            <div class='history-card history-card-compact'>
                 <div class='history-top'>
                     <div class='history-date'>{session.get('date', '-')}</div>
                     <div class='chapter-pills'>
@@ -438,8 +438,10 @@ def render_practice_history(chapter):
                         <span class='status-pill history-pill'>Correct: {session.get('correct', '-')}</span>
                     </div>
                 </div>
-                <div class='history-notes-label'>Notes</div>
-                <div class='history-notes'>{notes_value}</div>
+                <div class='hover-details history-notes-wrapper'>
+                    <div class='history-notes-label'>Notes</div>
+                    <div class='history-notes'>{notes_value}</div>
+                </div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -730,6 +732,17 @@ def main():
             box-shadow: 0 6px 16px rgba(15, 23, 42, 0.05);
         }
 
+        .history-card-compact {
+            cursor: pointer;
+            transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+        }
+
+        .history-card-compact:hover {
+            transform: translateY(-1px);
+            border-color: #93c5fd;
+            box-shadow: 0 10px 24px rgba(14, 30, 66, 0.1);
+        }
+
         .history-top {
             display: flex;
             justify-content: space-between;
@@ -759,6 +772,17 @@ def main():
             color: #475569;
             font-weight: 800;
             margin-bottom: 4px;
+        }
+
+        .history-notes-wrapper {
+            margin-top: 8px;
+        }
+
+        .history-card-compact:hover .history-notes-wrapper,
+        .history-card-compact:focus-within .history-notes-wrapper {
+            max-height: 200px;
+            opacity: 1;
+            transform: translateY(0);
         }
 
         .history-notes {
