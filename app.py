@@ -654,6 +654,50 @@ def main():
             margin-top: 4px;
         }
 
+        .section-hero {
+            background: linear-gradient(135deg, rgba(15, 118, 110, 0.1), rgba(14, 165, 233, 0.1));
+            border: 1px solid #c8d9ea;
+            border-radius: 12px;
+            padding: 10px 12px;
+            margin-bottom: 12px;
+        }
+
+        .section-hero-title {
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.7px;
+            color: #0f766e;
+            font-weight: 800;
+            margin-bottom: 2px;
+        }
+
+        .section-hero-sub {
+            font-size: 13px;
+            color: #334155;
+            font-weight: 600;
+        }
+
+        .section-inline-card {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .mini-chip {
+            display: inline-flex;
+            align-items: center;
+            border-radius: 999px;
+            padding: 5px 10px;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.4px;
+            text-transform: uppercase;
+            color: #0f172a;
+            background: rgba(248, 250, 252, 0.95);
+            border: 1px solid #dbe4ee;
+        }
+
         .chapter-card {
             background: var(--card-bg);
             border: 1px solid var(--card-border);
@@ -937,10 +981,38 @@ def main():
 
     with tabs[1]:
         st.subheader("Add / Update Lecture")
+        st.markdown(
+            """
+            <div class='section-hero'>
+                <div class='section-hero-title'>Lecture Tracker</div>
+                <div class='section-hero-sub'>Choose a chapter and quickly log today's lecture count.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
         names = [c["chapter_name"] for c in data["chapters"]]
-        selection = st.selectbox("Chapter", ["New chapter..."] + names, key="lecture_chapter_selection")
-        chapter_name = st.text_input("New chapter name", key="lecture_new_chapter_name") if selection == "New chapter..." else selection
-        lectures = st.number_input("Lectures watched today", min_value=0, max_value=10, value=0, step=1, key="lecture_count")
+        top_cols = st.columns([2, 1])
+        with top_cols[0]:
+            selection = st.selectbox("Chapter", ["New chapter..."] + names, key="lecture_chapter_selection")
+            chapter_name = st.text_input("New chapter name", key="lecture_new_chapter_name") if selection == "New chapter..." else selection
+        with top_cols[1]:
+            lectures = st.number_input("Lectures watched today", min_value=0, max_value=10, value=0, step=1, key="lecture_count")
+
+        chapter_preview = get_chapter(data, chapter_name) if chapter_name and selection != "New chapter..." else None
+        if chapter_preview:
+            preview_next = format_date(parse_date(chapter_preview.get("next_practice_date")))
+            st.markdown(
+                f"""
+                <div class='section-inline-card'>
+                    <span class='mini-chip'>Status: {chapter_preview.get('status', 'learning').title()}</span>
+                    <span class='mini-chip'>Total lectures: {chapter_preview.get('total_lectures_watched', 0)}</span>
+                    <span class='mini-chip'>Next practice: {preview_next}</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
         if st.button("Update lectures", key="update_lectures_button"):
             if not chapter_name:
                 st.error("Chapter name is required.")
@@ -954,6 +1026,15 @@ def main():
 
     with tabs[2]:
         st.subheader("Log Practice")
+        st.markdown(
+            """
+            <div class='section-hero'>
+                <div class='section-hero-title'>Practice Logger</div>
+                <div class='section-hero-sub'>Log attempts, accuracy, and notes to keep revision spaced and consistent.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         if not data["chapters"]:
             st.info("Add a chapter first.")
         else:
@@ -962,10 +1043,31 @@ def main():
                 [c["chapter_name"] for c in data["chapters"]],
                 key="practice_selected_chapter",
             )
+
+            selected_chapter = get_chapter(data, chapter_name)
+            if selected_chapter:
+                last_acc = selected_chapter["practice_sessions"][-1]["accuracy"] if selected_chapter["practice_sessions"] else "-"
+                next_practice = format_date(parse_date(selected_chapter.get("next_practice_date")))
+                st.markdown(
+                    f"""
+                    <div class='section-inline-card'>
+                        <span class='mini-chip'>Status: {selected_chapter.get('status', 'learning').title()}</span>
+                        <span class='mini-chip'>Last accuracy: {last_acc}%</span>
+                        <span class='mini-chip'>Sessions: {len(selected_chapter.get('practice_sessions', []))}</span>
+                        <span class='mini-chip'>Next practice: {next_practice}</span>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
             with st.form("log_practice_form"):
-                questions = st.number_input("Questions attempted", min_value=1, value=15, step=1)
-                correct = st.number_input("Correct answers", min_value=0, value=10, step=1)
-                notes = st.text_area("Notes (optional)")
+                input_cols = st.columns(2)
+                with input_cols[0]:
+                    questions = st.number_input("Questions attempted", min_value=1, value=15, step=1)
+                with input_cols[1]:
+                    correct = st.number_input("Correct answers", min_value=0, value=10, step=1)
+                notes = st.text_area("Notes (optional)", placeholder="Weak topics, mistakes, trick notes, or reminders for next session...")
+                st.caption("Tip: Keep notes short and actionable so you can revise them quickly later.")
                 submit_practice = st.form_submit_button("Log session")
                 if submit_practice:
                     chapter = get_chapter(data, chapter_name)
@@ -991,7 +1093,6 @@ def main():
                     st.rerun()
 
             st.divider()
-            selected_chapter = get_chapter(data, chapter_name)
             if selected_chapter:
                 render_practice_history(selected_chapter)
 
