@@ -493,7 +493,7 @@ def render_chapter_table(data):
         "Next",
         "Actions",
     ]
-    header_cols = st.columns([2.8, 1.4, 0.9, 0.8, 0.8, 0.9, 1.0, 1.0, 0.8, 1.1, 1.4])
+    header_cols = st.columns([2.2, 1.4, 0.95, 0.85, 0.85, 0.95, 1.05, 1.0, 0.85, 1.1, 1.4])
     for col, label in zip(header_cols, headers):
         col.markdown(f"<div class='table-header-cell'>{label}</div>", unsafe_allow_html=True)
 
@@ -510,7 +510,7 @@ def render_chapter_table(data):
         remaining = max(sheet_total - completed, 0)
         progress_pct = round(sheet_progress(chapter) * 100, 2)
 
-        row_cols = st.columns([2.8, 1.4, 0.9, 0.8, 0.8, 0.9, 1.0, 1.0, 0.8, 1.1, 1.4])
+        row_cols = st.columns([2.2, 1.4, 0.95, 0.85, 0.85, 0.95, 1.05, 1.0, 0.85, 1.1, 1.4])
         row_cols[0].markdown(f"<div class='table-row-cell chapter-cell'>{chapter_name}</div>", unsafe_allow_html=True)
         row_cols[1].markdown(f"<div class='table-row-cell'>{render_status_badge(chapter.get('status', 'learning'))}</div>", unsafe_allow_html=True)
         row_cols[2].markdown(f"<div class='table-row-cell'>{chapter.get('total_lectures_watched', 0)}</div>", unsafe_allow_html=True)
