@@ -1,6 +1,7 @@
 import base64
 import json
 from datetime import date, datetime, timedelta
+from textwrap import dedent
 
 import requests
 import streamlit as st
@@ -352,41 +353,43 @@ def render_dashboard(data):
 
         with st.container():
             st.markdown(
-                f"""
-                <div class='chapter-card chapter-card-compact'>
-                    <div class='chapter-card-top'>
-                        <div class='chapter-title'>{chapter['chapter_name']}</div>
-                        <div class='chapter-pills'>{status_badge}{due_badge}</div>
-                    </div>
+                dedent(
+                    f"""
+                    <div class='chapter-card chapter-card-compact'>
+                        <div class='chapter-card-top'>
+                            <div class='chapter-title'>{chapter['chapter_name']}</div>
+                            <div class='chapter-pills'>{status_badge}{due_badge}</div>
+                        </div>
 
-                    <div class='chapter-grid'>
-                        <div class='stat-chip'>
-                            <span class='stat-label'>Last Accuracy</span>
-                            <span class='stat-value'>{last_accuracy if last_accuracy is not None else '-'}%</span>
+                        <div class='chapter-grid'>
+                            <div class='stat-chip'>
+                                <span class='stat-label'>Last Accuracy</span>
+                                <span class='stat-value'>{last_accuracy if last_accuracy is not None else '-'}%</span>
+                            </div>
+                            <div class='stat-chip'>
+                                <span class='stat-label'>Next Practice</span>
+                                <span class='stat-value'>{format_date(next_date)}</span>
+                            </div>
+                            <div class='stat-chip'>
+                                <span class='stat-label'>Sessions Done</span>
+                                <span class='stat-value'>{sessions_done}</span>
+                            </div>
+                            <div class='stat-chip'>
+                                <span class='stat-label'>Sheet Progress</span>
+                                <span class='stat-value'>{sheet_pct}%</span>
+                            </div>
                         </div>
-                        <div class='stat-chip'>
-                            <span class='stat-label'>Next Practice</span>
-                            <span class='stat-value'>{format_date(next_date)}</span>
-                        </div>
-                        <div class='stat-chip'>
-                            <span class='stat-label'>Sessions Done</span>
-                            <span class='stat-value'>{sessions_done}</span>
-                        </div>
-                        <div class='stat-chip'>
-                            <span class='stat-label'>Sheet Progress</span>
-                            <span class='stat-value'>{sheet_pct}%</span>
-                        </div>
-                    </div>
 
-                    <div class='progress-row'>
-                        <span class='progress-label'>Cycle Progress</span>
-                        <span class='progress-value'>{progress_pct}%</span>
+                        <div class='progress-row'>
+                            <span class='progress-label'>Cycle Progress</span>
+                            <span class='progress-value'>{progress_pct}%</span>
+                        </div>
+                        <div class='progress-track'>
+                            <div class='progress-fill' style='width: {progress_pct}%;'></div>
+                        </div>
                     </div>
-                    <div class='progress-track'>
-                        <div class='progress-fill' style='width: {progress_pct}%;'></div>
-                    </div>
-                </div>
-                """,
+                    """
+                ),
                 unsafe_allow_html=True,
             )
 
