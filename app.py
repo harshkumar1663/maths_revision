@@ -1103,7 +1103,7 @@ def main():
             """
             <div class='section-hero'>
                 <div class='section-hero-title'>Practice Logger</div>
-                <div class='section-hero-sub'>Log attempts, accuracy, and notes to keep revision spaced and consistent.</div>
+                <div class='section-hero-sub'>Log attempts, accuracy, and notes to keep revision spaced and consistent. Scroll down to see your logged practices.</div>
             </div>
             """,
             unsafe_allow_html=True,
