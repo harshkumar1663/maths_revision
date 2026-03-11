@@ -349,51 +349,71 @@ def render_dashboard(data):
         sessions_done = len(chapter.get("practice_sessions", []))
         sheet_pct = round(sheet_progress(chapter) * 100)
         progress_pct = min(round((sessions_done / 4) * 100), 100)
-        acc_label = f"{last_accuracy}%" if last_accuracy is not None else "-"
-        due_label = "OVERDUE" if overdue else ("DUE TODAY" if due else "SCHEDULED")
-        summary_label = (
-            f"{chapter['chapter_name']} | {chapter.get('status', 'learning').title()} | "
-            f"Acc: {acc_label} | Next: {format_date(next_date)} | {due_label}"
+        if "dashboard_card_state" not in st.session_state:
+            st.session_state["dashboard_card_state"] = {}
+
+        card_key = f"dashboard_card_{chapter['chapter_name']}"
+        current_state = st.session_state["dashboard_card_state"].get(card_key, False)
+
+        toggle_cols = st.columns([8.5, 1.5])
+        with toggle_cols[1]:
+            toggle_text = "Hide details" if current_state else "Show details"
+            if st.button(toggle_text, key=f"toggle_{card_key}"):
+                st.session_state["dashboard_card_state"][card_key] = not current_state
+
+        expanded = st.session_state["dashboard_card_state"].get(card_key, False)
+
+        compact_grid = (
+            "<div class='chapter-grid chapter-grid-compact'>"
+            "<div class='stat-chip'>"
+            "<span class='stat-label'>Last Accuracy</span>"
+            f"<span class='stat-value'>{last_accuracy if last_accuracy is not None else '-'}%</span>"
+            "</div>"
+            "<div class='stat-chip'>"
+            "<span class='stat-label'>Next Practice</span>"
+            f"<span class='stat-value'>{format_date(next_date)}</span>"
+            "</div>"
+            "</div>"
         )
 
-        with st.expander(summary_label, expanded=False):
-            card_html = (
-                "<div class='chapter-card chapter-card-compact'>"
-                "<div class='chapter-card-top'>"
-                f"<div class='chapter-title'>{chapter['chapter_name']}</div>"
-                f"<div class='chapter-pills'>{status_badge}{due_badge}</div>"
-                "</div>"
-                "<div class='chapter-grid'>"
-                "<div class='stat-chip'>"
-                "<span class='stat-label'>Last Accuracy</span>"
-                f"<span class='stat-value'>{last_accuracy if last_accuracy is not None else '-'}%</span>"
-                "</div>"
-                "<div class='stat-chip'>"
-                "<span class='stat-label'>Next Practice</span>"
-                f"<span class='stat-value'>{format_date(next_date)}</span>"
-                "</div>"
-                "<div class='stat-chip'>"
-                "<span class='stat-label'>Sessions Done</span>"
-                f"<span class='stat-value'>{sessions_done}</span>"
-                "</div>"
-                "<div class='stat-chip'>"
-                "<span class='stat-label'>Sheet Progress</span>"
-                f"<span class='stat-value'>{sheet_pct}%</span>"
-                "</div>"
-                "</div>"
-                "<div class='progress-row'>"
-                "<span class='progress-label'>Cycle Progress</span>"
-                f"<span class='progress-value'>{progress_pct}%</span>"
-                "</div>"
-                "<div class='progress-track'>"
-                f"<div class='progress-fill' style='width: {progress_pct}%;'></div>"
-                "</div>"
-                "</div>"
-            )
-            st.markdown(
-                card_html,
-                unsafe_allow_html=True,
-            )
+        expanded_grid = (
+            "<div class='chapter-grid'>"
+            "<div class='stat-chip'>"
+            "<span class='stat-label'>Last Accuracy</span>"
+            f"<span class='stat-value'>{last_accuracy if last_accuracy is not None else '-'}%</span>"
+            "</div>"
+            "<div class='stat-chip'>"
+            "<span class='stat-label'>Next Practice</span>"
+            f"<span class='stat-value'>{format_date(next_date)}</span>"
+            "</div>"
+            "<div class='stat-chip'>"
+            "<span class='stat-label'>Sessions Done</span>"
+            f"<span class='stat-value'>{sessions_done}</span>"
+            "</div>"
+            "<div class='stat-chip'>"
+            "<span class='stat-label'>Sheet Progress</span>"
+            f"<span class='stat-value'>{sheet_pct}%</span>"
+            "</div>"
+            "</div>"
+        )
+
+        card_html = (
+            "<div class='chapter-card chapter-card-compact'>"
+            "<div class='chapter-card-top'>"
+            f"<div class='chapter-title'>{chapter['chapter_name']}</div>"
+            f"<div class='chapter-pills'>{status_badge}{due_badge}</div>"
+            "</div>"
+            f"{expanded_grid if expanded else compact_grid}"
+            "<div class='progress-row'>"
+            "<span class='progress-label'>Cycle Progress</span>"
+            f"<span class='progress-value'>{progress_pct}%</span>"
+            "</div>"
+            "<div class='progress-track'>"
+            f"<div class='progress-fill' style='width: {progress_pct}%;'></div>"
+            "</div>"
+            "</div>"
+        )
+        st.markdown(card_html, unsafe_allow_html=True)
 
 
 def render_maintenance_view(data):
@@ -789,6 +809,10 @@ def main():
             grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 8px;
             margin-bottom: 10px;
+        }
+
+        .chapter-grid-compact {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
         }
 
         .stat-chip {
