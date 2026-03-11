@@ -349,8 +349,9 @@ def render_dashboard(data):
         sessions_done = len(chapter.get("practice_sessions", []))
         sheet_pct = round(sheet_progress(chapter) * 100)
         progress_pct = min(round((sessions_done / 4) * 100), 100)
-        summary_grid = (
-            "<div class='chapter-grid chapter-grid-summary'>"
+
+        detail_grid = (
+            "<div class='chapter-grid chapter-grid-details'>"
             "<div class='stat-chip'>"
             "<span class='stat-label'>Last Accuracy</span>"
             f"<span class='stat-value'>{last_accuracy if last_accuracy is not None else '-'}%</span>"
@@ -359,11 +360,6 @@ def render_dashboard(data):
             "<span class='stat-label'>Next Practice</span>"
             f"<span class='stat-value'>{format_date(next_date)}</span>"
             "</div>"
-            "</div>"
-        )
-
-        detail_grid = (
-            "<div class='chapter-grid chapter-grid-details'>"
             "<div class='stat-chip'>"
             "<span class='stat-label'>Sessions Done</span>"
             f"<span class='stat-value'>{sessions_done}</span>"
@@ -379,9 +375,8 @@ def render_dashboard(data):
             "<div class='chapter-card chapter-card-compact'>"
             "<div class='chapter-card-top'>"
             f"<div class='chapter-title'>{chapter['chapter_name']}</div>"
-            f"<div class='chapter-pills'>{status_badge}{due_badge}</div>"
+            f"<div class='chapter-pills'>{status_badge}{due_badge}<span class='status-pill next-practice-pill'>Next: {format_date(next_date)}</span></div>"
             "</div>"
-            f"{summary_grid}"
             "<div class='hover-details'>"
             f"{detail_grid}"
             "</div>"
@@ -793,6 +788,16 @@ def main():
             border: 1px solid rgba(239, 68, 68, 0.32);
         }
 
+        .next-practice-pill {
+            background: rgba(15, 23, 42, 0.06);
+            color: #334155;
+            border: 1px solid rgba(148, 163, 184, 0.4);
+            transition: opacity 200ms ease, transform 200ms ease, max-width 220ms ease, padding 200ms ease, margin 200ms ease;
+            max-width: 240px;
+            overflow: hidden;
+            white-space: nowrap;
+        }
+
         .chapter-grid {
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -821,6 +826,17 @@ def main():
             max-height: 220px;
             opacity: 1;
             transform: translateY(0);
+        }
+
+        .chapter-card-compact:hover .next-practice-pill,
+        .chapter-card-compact:focus-within .next-practice-pill {
+            opacity: 0;
+            transform: translateY(-3px);
+            max-width: 0;
+            padding-left: 0;
+            padding-right: 0;
+            margin: 0;
+            border-width: 0;
         }
 
         .stat-chip {
@@ -892,6 +908,10 @@ def main():
                 max-height: 220px;
                 opacity: 1;
                 transform: none;
+            }
+
+            .next-practice-pill {
+                display: none;
             }
         }
         </style>
