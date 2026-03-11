@@ -469,6 +469,24 @@ def render_chapter_table(data):
                     st.session_state["show_add_chapter"] = False
                     st.rerun()
 
+    headers = [
+        "Chapter",
+        "Subject",
+        "Status",
+        "Lectures",
+        "Sheet",
+        "Solved",
+        "Remaining",
+        "Progress %",
+        "Last Accuracy",
+        "Sessions",
+        "Next",
+        "Actions",
+    ]
+    header_cols = st.columns([2.6, 1.2, 1.3, 0.9, 0.8, 0.8, 0.9, 1.0, 0.9, 0.8, 1.1, 1.4])
+    for col, label in zip(header_cols, headers):
+        col.markdown(f"<div class='table-header-cell'>{label}</div>", unsafe_allow_html=True)
+
     for chapter in data["chapters"]:
         chapter_name = chapter["chapter_name"]
         last_accuracy = chapter["practice_sessions"][-1]["accuracy"] if chapter["practice_sessions"] else None
@@ -478,37 +496,32 @@ def render_chapter_table(data):
         remaining = max(sheet_total - completed, 0)
         progress_pct = round(sheet_progress(chapter) * 100, 2)
 
-        st.markdown(
-            f"""
-            <div class='chapter-table-card'>
-                <div class='chapter-card-top'>
-                    <div class='chapter-title'>{chapter_name}</div>
-                    <div class='chapter-pills'>
-                        <span class='status-pill subject-pill'>{chapter.get('subject', 'Maths')}</span>
-                        {render_status_badge(chapter.get('status', 'learning'))}
-                    </div>
-                </div>
-
-                <div class='chapter-grid'>
-                    <div class='stat-chip'><span class='stat-label'>Lectures</span><span class='stat-value'>{chapter.get('total_lectures_watched', 0)}</span></div>
-                    <div class='stat-chip'><span class='stat-label'>Sheet Size</span><span class='stat-value'>{sheet_total}</span></div>
-                    <div class='stat-chip'><span class='stat-label'>Solved</span><span class='stat-value'>{completed}</span></div>
-                    <div class='stat-chip'><span class='stat-label'>Remaining</span><span class='stat-value'>{remaining}</span></div>
-                    <div class='stat-chip'><span class='stat-label'>Sheet Progress</span><span class='stat-value'>{progress_pct}%</span></div>
-                    <div class='stat-chip'><span class='stat-label'>Last Accuracy</span><span class='stat-value'>{last_accuracy if last_accuracy is not None else '-'}%</span></div>
-                    <div class='stat-chip'><span class='stat-label'>Sessions</span><span class='stat-value'>{len(chapter.get('practice_sessions', []))}</span></div>
-                    <div class='stat-chip'><span class='stat-label'>Next Practice</span><span class='stat-value'>{format_date(next_date)}</span></div>
-                </div>
-            </div>
-            """,
+        row_cols = st.columns([2.6, 1.2, 1.3, 0.9, 0.8, 0.8, 0.9, 1.0, 0.9, 0.8, 1.1, 1.4])
+        row_cols[0].markdown(f"<div class='table-row-cell chapter-cell'>{chapter_name}</div>", unsafe_allow_html=True)
+        row_cols[1].markdown(
+            f"<div class='table-row-cell'><span class='status-pill subject-pill'>{chapter.get('subject', 'Maths')}</span></div>",
             unsafe_allow_html=True,
         )
+        row_cols[2].markdown(f"<div class='table-row-cell'>{render_status_badge(chapter.get('status', 'learning'))}</div>", unsafe_allow_html=True)
+        row_cols[3].markdown(f"<div class='table-row-cell'>{chapter.get('total_lectures_watched', 0)}</div>", unsafe_allow_html=True)
+        row_cols[4].markdown(f"<div class='table-row-cell'>{sheet_total}</div>", unsafe_allow_html=True)
+        row_cols[5].markdown(f"<div class='table-row-cell'>{completed}</div>", unsafe_allow_html=True)
+        row_cols[6].markdown(f"<div class='table-row-cell'>{remaining}</div>", unsafe_allow_html=True)
+        row_cols[7].markdown(f"<div class='table-row-cell'>{progress_pct}%</div>", unsafe_allow_html=True)
+        row_cols[8].markdown(
+            f"<div class='table-row-cell'>{last_accuracy if last_accuracy is not None else '-'}%</div>",
+            unsafe_allow_html=True,
+        )
+        row_cols[9].markdown(
+            f"<div class='table-row-cell'>{len(chapter.get('practice_sessions', []))}</div>",
+            unsafe_allow_html=True,
+        )
+        row_cols[10].markdown(f"<div class='table-row-cell'>{format_date(next_date)}</div>", unsafe_allow_html=True)
 
-        action_cols = st.columns([1, 1, 8])
-        if action_cols[0].button("✏️ Edit", key=f"edit_{chapter_name}"):
+        action_cell = row_cols[11].columns(2)
+        if action_cell[0].button("✏️", key=f"edit_{chapter_name}"):
             st.session_state["edit_chapter"] = chapter_name
-
-        if action_cols[1].button("🗑️ Delete", key=f"delete_{chapter_name}"):
+        if action_cell[1].button("🗑️", key=f"delete_{chapter_name}"):
             st.session_state["delete_chapter"] = chapter_name
 
         if st.session_state.get("edit_chapter") == chapter_name:
@@ -553,7 +566,7 @@ def render_chapter_table(data):
             if confirm_cols[1].button("Cancel", key=f"cancel_delete_{chapter_name}"):
                 st.session_state["delete_chapter"] = None
 
-        st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+        st.markdown("<div class='table-row-divider'></div>", unsafe_allow_html=True)
 
 
 def main():
@@ -691,6 +704,45 @@ def main():
             background: rgba(15, 118, 110, 0.12);
             color: #0f766e;
             border: 1px solid rgba(15, 118, 110, 0.28);
+        }
+
+        .table-header-cell {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            color: #475569;
+            font-weight: 800;
+            background: rgba(226, 232, 240, 0.45);
+            border: 1px solid #dbe4ee;
+            border-radius: 8px;
+            padding: 8px 10px;
+            margin-bottom: 6px;
+            text-align: center;
+        }
+
+        .table-row-cell {
+            font-size: 13px;
+            color: #0f172a;
+            font-weight: 600;
+            background: rgba(255, 255, 255, 0.72);
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 7px 10px;
+            text-align: center;
+            min-height: 34px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .chapter-cell {
+            justify-content: flex-start;
+            font-weight: 800;
+            color: #0b1220;
+        }
+
+        .table-row-divider {
+            height: 8px;
         }
 
         .status-learning {
