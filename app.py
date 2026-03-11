@@ -517,22 +517,20 @@ def main():
 
     with tabs[1]:
         st.subheader("Add / Update Lecture")
-        with st.form("update_lecture_form"):
-            names = [c["chapter_name"] for c in data["chapters"]]
-            selection = st.selectbox("Chapter", ["New chapter..."] + names)
-            chapter_name = st.text_input("New chapter name") if selection == "New chapter..." else selection
-            lectures = st.number_input("Lectures watched today", min_value=0, max_value=10, value=0, step=1)
-            submit_lecture = st.form_submit_button("Update lectures")
-            if submit_lecture:
-                if not chapter_name:
-                    st.error("Chapter name is required.")
-                else:
-                    chapter = ensure_chapter(data, chapter_name)
-                    lecture_logged = record_lecture(chapter, int(lectures))
-                    adjust_next_practice_for_lecture(chapter, lecture_logged)
-                    save_data(data)
-                    st.success("Lecture count updated.")
-                    st.rerun()
+        names = [c["chapter_name"] for c in data["chapters"]]
+        selection = st.selectbox("Chapter", ["New chapter..."] + names, key="lecture_chapter_selection")
+        chapter_name = st.text_input("New chapter name", key="lecture_new_chapter_name") if selection == "New chapter..." else selection
+        lectures = st.number_input("Lectures watched today", min_value=0, max_value=10, value=0, step=1, key="lecture_count")
+        if st.button("Update lectures", key="update_lectures_button"):
+            if not chapter_name:
+                st.error("Chapter name is required.")
+            else:
+                chapter = ensure_chapter(data, chapter_name)
+                lecture_logged = record_lecture(chapter, int(lectures))
+                adjust_next_practice_for_lecture(chapter, lecture_logged)
+                save_data(data)
+                st.success("Lecture count updated.")
+                st.rerun()
 
     with tabs[2]:
         st.subheader("Log Practice")
