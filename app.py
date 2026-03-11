@@ -349,8 +349,14 @@ def render_dashboard(data):
         sessions_done = len(chapter.get("practice_sessions", []))
         sheet_pct = round(sheet_progress(chapter) * 100)
         progress_pct = min(round((sessions_done / 4) * 100), 100)
+        acc_label = f"{last_accuracy}%" if last_accuracy is not None else "-"
+        due_label = "OVERDUE" if overdue else ("DUE TODAY" if due else "SCHEDULED")
+        summary_label = (
+            f"{chapter['chapter_name']} | {chapter.get('status', 'learning').title()} | "
+            f"Acc: {acc_label} | Next: {format_date(next_date)} | {due_label}"
+        )
 
-        with st.container():
+        with st.expander(summary_label, expanded=False):
             card_html = (
                 "<div class='chapter-card chapter-card-compact'>"
                 "<div class='chapter-card-top'>"
