@@ -469,9 +469,19 @@ def render_chapter_table(data):
                     st.session_state["show_add_chapter"] = False
                     st.rerun()
 
+    selected_subject = st.radio(
+        "Show subject",
+        ["MATHS", "REASONING"],
+        horizontal=True,
+        key="chapter_table_subject_filter",
+    )
+    subject_filter = selected_subject.title()
+    filtered_chapters = [
+        chapter for chapter in data["chapters"] if chapter.get("subject", "Maths") == subject_filter
+    ]
+
     headers = [
         "Chapter",
-        "Subject",
         "Status",
         "Lectures",
         "Sheet",
@@ -483,11 +493,15 @@ def render_chapter_table(data):
         "Next",
         "Actions",
     ]
-    header_cols = st.columns([2.6, 1.2, 1.3, 0.9, 0.8, 0.8, 0.9, 1.0, 0.9, 0.8, 1.1, 1.4])
+    header_cols = st.columns([2.8, 1.4, 0.9, 0.8, 0.8, 0.9, 1.0, 1.0, 0.8, 1.1, 1.4])
     for col, label in zip(header_cols, headers):
         col.markdown(f"<div class='table-header-cell'>{label}</div>", unsafe_allow_html=True)
 
-    for chapter in data["chapters"]:
+    if not filtered_chapters:
+        st.info(f"No chapters found for {selected_subject}.")
+        return
+
+    for chapter in filtered_chapters:
         chapter_name = chapter["chapter_name"]
         last_accuracy = chapter["practice_sessions"][-1]["accuracy"] if chapter["practice_sessions"] else None
         next_date = parse_date(chapter.get("next_practice_date"))
@@ -496,29 +510,25 @@ def render_chapter_table(data):
         remaining = max(sheet_total - completed, 0)
         progress_pct = round(sheet_progress(chapter) * 100, 2)
 
-        row_cols = st.columns([2.6, 1.2, 1.3, 0.9, 0.8, 0.8, 0.9, 1.0, 0.9, 0.8, 1.1, 1.4])
+        row_cols = st.columns([2.8, 1.4, 0.9, 0.8, 0.8, 0.9, 1.0, 1.0, 0.8, 1.1, 1.4])
         row_cols[0].markdown(f"<div class='table-row-cell chapter-cell'>{chapter_name}</div>", unsafe_allow_html=True)
-        row_cols[1].markdown(
-            f"<div class='table-row-cell'><span class='status-pill subject-pill'>{chapter.get('subject', 'Maths')}</span></div>",
-            unsafe_allow_html=True,
-        )
-        row_cols[2].markdown(f"<div class='table-row-cell'>{render_status_badge(chapter.get('status', 'learning'))}</div>", unsafe_allow_html=True)
-        row_cols[3].markdown(f"<div class='table-row-cell'>{chapter.get('total_lectures_watched', 0)}</div>", unsafe_allow_html=True)
-        row_cols[4].markdown(f"<div class='table-row-cell'>{sheet_total}</div>", unsafe_allow_html=True)
-        row_cols[5].markdown(f"<div class='table-row-cell'>{completed}</div>", unsafe_allow_html=True)
-        row_cols[6].markdown(f"<div class='table-row-cell'>{remaining}</div>", unsafe_allow_html=True)
-        row_cols[7].markdown(f"<div class='table-row-cell'>{progress_pct}%</div>", unsafe_allow_html=True)
-        row_cols[8].markdown(
+        row_cols[1].markdown(f"<div class='table-row-cell'>{render_status_badge(chapter.get('status', 'learning'))}</div>", unsafe_allow_html=True)
+        row_cols[2].markdown(f"<div class='table-row-cell'>{chapter.get('total_lectures_watched', 0)}</div>", unsafe_allow_html=True)
+        row_cols[3].markdown(f"<div class='table-row-cell'>{sheet_total}</div>", unsafe_allow_html=True)
+        row_cols[4].markdown(f"<div class='table-row-cell'>{completed}</div>", unsafe_allow_html=True)
+        row_cols[5].markdown(f"<div class='table-row-cell'>{remaining}</div>", unsafe_allow_html=True)
+        row_cols[6].markdown(f"<div class='table-row-cell'>{progress_pct}%</div>", unsafe_allow_html=True)
+        row_cols[7].markdown(
             f"<div class='table-row-cell'>{last_accuracy if last_accuracy is not None else '-'}%</div>",
             unsafe_allow_html=True,
         )
-        row_cols[9].markdown(
+        row_cols[8].markdown(
             f"<div class='table-row-cell'>{len(chapter.get('practice_sessions', []))}</div>",
             unsafe_allow_html=True,
         )
-        row_cols[10].markdown(f"<div class='table-row-cell'>{format_date(next_date)}</div>", unsafe_allow_html=True)
+        row_cols[9].markdown(f"<div class='table-row-cell'>{format_date(next_date)}</div>", unsafe_allow_html=True)
 
-        action_cell = row_cols[11].columns(2)
+        action_cell = row_cols[10].columns(2)
         if action_cell[0].button("✏️", key=f"edit_{chapter_name}"):
             st.session_state["edit_chapter"] = chapter_name
         if action_cell[1].button("🗑️", key=f"delete_{chapter_name}"):
@@ -698,12 +708,6 @@ def main():
             font-weight: 800;
             letter-spacing: 0.4px;
             text-transform: uppercase;
-        }
-
-        .subject-pill {
-            background: rgba(15, 118, 110, 0.12);
-            color: #0f766e;
-            border: 1px solid rgba(15, 118, 110, 0.28);
         }
 
         .table-header-cell {
