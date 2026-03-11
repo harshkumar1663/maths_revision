@@ -292,6 +292,44 @@ def render_status_badge(status):
 def render_dashboard(data):
     st.subheader("Chapter Overview")
     today = date.today()
+
+    total_chapters = len(data["chapters"])
+    due_today_count = 0
+    overdue_count = 0
+    accuracy_values = []
+
+    for chapter in data["chapters"]:
+        if chapter["practice_sessions"]:
+            accuracy_values.append(chapter["practice_sessions"][-1]["accuracy"])
+        next_date = parse_date(chapter.get("next_practice_date"))
+        if next_date:
+            if next_date == today:
+                due_today_count += 1
+            elif next_date < today:
+                overdue_count += 1
+        elif practice_unlocks(chapter):
+            due_today_count += 1
+
+    avg_accuracy = round(sum(accuracy_values) / len(accuracy_values), 2) if accuracy_values else 0
+
+    metric_cols = st.columns(4)
+    metric_cols[0].markdown(
+        f"<div class='metric-card'><div class='metric-label'>Total Chapters</div><div class='metric-value'>{total_chapters}</div></div>",
+        unsafe_allow_html=True,
+    )
+    metric_cols[1].markdown(
+        f"<div class='metric-card'><div class='metric-label'>Due Today</div><div class='metric-value'>{due_today_count}</div></div>",
+        unsafe_allow_html=True,
+    )
+    metric_cols[2].markdown(
+        f"<div class='metric-card'><div class='metric-label'>Overdue</div><div class='metric-value'>{overdue_count}</div></div>",
+        unsafe_allow_html=True,
+    )
+    metric_cols[3].markdown(
+        f"<div class='metric-card'><div class='metric-label'>Avg Accuracy</div><div class='metric-value'>{avg_accuracy}%</div></div>",
+        unsafe_allow_html=True,
+    )
+
     for chapter in data["chapters"]:
         last_accuracy = chapter["practice_sessions"][-1]["accuracy"] if chapter["practice_sessions"] else None
         next_date = parse_date(chapter.get("next_practice_date"))
@@ -306,14 +344,14 @@ def render_dashboard(data):
         with st.container():
             st.markdown(
                 f"""
-                <div style='border:1px solid #e5e7eb;border-radius:12px;padding:12px;margin-bottom:10px;'>
-                    <div style='display:flex;justify-content:space-between;align-items:center;'>
-                        <div style='font-weight:600;font-size:16px;'>{chapter['chapter_name']}</div>
+                <div class='chapter-card'>
+                    <div style='display:flex;justify-content:space-between;align-items:center;gap:8px;'>
+                        <div style='font-weight:700;font-size:17px;'>{chapter['chapter_name']}</div>
                         <div>{status_badge}</div>
                     </div>
-                    <div style='margin-top:6px;font-size:14px;'>
-                        Last accuracy: <strong>{last_accuracy if last_accuracy is not None else '-'}</strong>
-                        &nbsp;|&nbsp; Next practice: <strong>{format_date(next_date)}</strong>
+                    <div style='margin-top:8px;font-size:14px;color:#475569;'>
+                        Last accuracy: <strong style='color:#0f172a;'>{last_accuracy if last_accuracy is not None else '-'}</strong>
+                        &nbsp;|&nbsp; Next practice: <strong style='color:#0f172a;'>{format_date(next_date)}</strong>
                     </div>
                 </div>
                 """,
@@ -335,9 +373,11 @@ def render_maintenance_view(data):
         next_date = parse_date(chapter.get("next_practice_date"))
         st.markdown(
             f"""
-            <div style='border:1px solid #e5e7eb;border-radius:12px;padding:12px;margin-bottom:10px;'>
-                <div style='font-weight:600;font-size:16px;'>{chapter['chapter_name']}</div>
-                <div style='margin-top:6px;font-size:14px;'>Next maintenance: <strong>{format_date(next_date)}</strong></div>
+            <div class='chapter-card'>
+                <div style='font-weight:700;font-size:17px;'>{chapter['chapter_name']}</div>
+                <div style='margin-top:8px;font-size:14px;color:#475569;'>
+                    Next maintenance: <strong style='color:#0f172a;'>{format_date(next_date)}</strong>
+                </div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -492,18 +532,86 @@ def render_chapter_table(data):
 
 
 def main():
-    st.set_page_config(page_title="SSC Maths & Reasoning Practice Tracker", layout="wide")
+    st.set_page_config(page_title="SSC Maths & Reasoning Practice Tracker", layout="wide", initial_sidebar_state="collapsed")
     st.title("SSC Maths & Reasoning Practice Tracker")
     st.markdown(
         """
         <style>
-        @import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600&family=Source+Serif+4:wght@500;600&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=Fraunces:opsz,wght@9..144,500;9..144,700&display=swap');
+
+        :root {
+            --bg-soft: #f8fafc;
+            --card-bg: rgba(255, 255, 255, 0.88);
+            --card-border: #dbe4ee;
+            --ink: #0f172a;
+            --muted: #475569;
+            --brand: #0f766e;
+            --brand-strong: #115e59;
+            --accent: #0ea5e9;
+        }
+
         html, body, [class*="stApp"] {
-            font-family: 'Source Sans 3', sans-serif;
-            color: #0f172a;
+            font-family: 'Manrope', sans-serif;
+            color: var(--ink);
+            background:
+                radial-gradient(circle at 0% 0%, rgba(14, 165, 233, 0.12), transparent 40%),
+                radial-gradient(circle at 100% 0%, rgba(15, 118, 110, 0.12), transparent 35%),
+                var(--bg-soft);
         }
         h1, h2, h3 {
-            font-family: 'Source Serif 4', serif;
+            font-family: 'Fraunces', serif;
+            letter-spacing: 0.2px;
+        }
+
+        div[data-testid="stTabs"] {
+            background: linear-gradient(180deg, rgba(255,255,255,0.8), rgba(255,255,255,0.55));
+            border: 1px solid var(--card-border);
+            border-radius: 14px;
+            padding: 10px;
+            margin-bottom: 14px;
+            backdrop-filter: blur(4px);
+        }
+
+        button[kind="primary"] {
+            background: linear-gradient(135deg, var(--brand), var(--accent));
+            border: 0;
+            color: white;
+            border-radius: 10px;
+            font-weight: 700;
+        }
+
+        .metric-card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 14px;
+            padding: 12px 14px;
+            margin-bottom: 8px;
+            box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
+        }
+
+        .metric-label {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            color: var(--muted);
+            font-weight: 700;
+        }
+
+        .metric-value {
+            font-size: 26px;
+            line-height: 1.15;
+            color: var(--ink);
+            font-weight: 800;
+            margin-top: 4px;
+        }
+
+        .chapter-card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 14px;
+            padding: 14px;
+            margin-bottom: 10px;
+            box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
         }
         </style>
         """,
