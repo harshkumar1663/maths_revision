@@ -415,23 +415,35 @@ def render_practice_history(chapter):
     st.markdown("### Practice History")
     sessions = chapter.get("practice_sessions", [])
     if not sessions:
-        st.caption("No practice sessions logged yet for this chapter.")
+        st.markdown(
+            """
+            <div class='history-empty'>
+                No practice sessions logged yet for this chapter.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         return
 
     for session in reversed(sessions):
-        title = (
-            f"{session.get('date', '-')} | "
-            f"Accuracy: {session.get('accuracy', '-')}% | "
-            f"Attempted: {session.get('questions_attempted', '-')}"
+        notes_value = session.get("notes") or "No notes added."
+        st.markdown(
+            f"""
+            <div class='history-card'>
+                <div class='history-top'>
+                    <div class='history-date'>{session.get('date', '-')}</div>
+                    <div class='chapter-pills'>
+                        <span class='status-pill history-pill'>Accuracy: {session.get('accuracy', '-')}%</span>
+                        <span class='status-pill history-pill'>Attempted: {session.get('questions_attempted', '-')}</span>
+                        <span class='status-pill history-pill'>Correct: {session.get('correct', '-')}</span>
+                    </div>
+                </div>
+                <div class='history-notes-label'>Notes</div>
+                <div class='history-notes'>{notes_value}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
-        with st.expander(title):
-            detail_cols = st.columns(3)
-            detail_cols[0].write(f"Correct: {session.get('correct', '-')}")
-            detail_cols[1].write(f"Attempted: {session.get('questions_attempted', '-')}")
-            detail_cols[2].write(f"Accuracy: {session.get('accuracy', '-')}%")
-
-            st.markdown("**Notes**")
-            st.write(session.get("notes") or "No notes added.")
 
 
 def render_chapter_table(data):
@@ -696,6 +708,67 @@ def main():
             color: #0f172a;
             background: rgba(248, 250, 252, 0.95);
             border: 1px solid #dbe4ee;
+        }
+
+        .history-empty {
+            border: 1px dashed #cbd5e1;
+            color: #64748b;
+            background: rgba(248, 250, 252, 0.6);
+            border-radius: 10px;
+            padding: 12px;
+            font-size: 13px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .history-card {
+            background: rgba(255, 255, 255, 0.82);
+            border: 1px solid #dbe4ee;
+            border-radius: 12px;
+            padding: 10px 12px;
+            margin-bottom: 8px;
+            box-shadow: 0 6px 16px rgba(15, 23, 42, 0.05);
+        }
+
+        .history-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 8px;
+        }
+
+        .history-date {
+            font-size: 13px;
+            font-weight: 800;
+            color: #0f172a;
+            letter-spacing: 0.2px;
+        }
+
+        .history-pill {
+            background: rgba(14, 165, 233, 0.09);
+            color: #075985;
+            border: 1px solid rgba(14, 165, 233, 0.24);
+        }
+
+        .history-notes-label {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            color: #475569;
+            font-weight: 800;
+            margin-bottom: 4px;
+        }
+
+        .history-notes {
+            background: rgba(248, 250, 252, 0.95);
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 8px 10px;
+            color: #0f172a;
+            font-size: 13px;
+            line-height: 1.45;
         }
 
         .chapter-card {
