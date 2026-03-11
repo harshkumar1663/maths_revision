@@ -548,8 +548,12 @@ def main():
         if not data["chapters"]:
             st.info("Add a chapter first.")
         else:
+            chapter_name = st.selectbox(
+                "Chapter",
+                [c["chapter_name"] for c in data["chapters"]],
+                key="practice_selected_chapter",
+            )
             with st.form("log_practice_form"):
-                chapter_name = st.selectbox("Chapter", [c["chapter_name"] for c in data["chapters"]])
                 questions = st.number_input("Questions attempted", min_value=1, value=15, step=1)
                 correct = st.number_input("Correct answers", min_value=0, value=10, step=1)
                 notes = st.text_area("Notes (optional)")
