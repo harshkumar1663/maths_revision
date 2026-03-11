@@ -284,9 +284,8 @@ def status_color(status):
 
 
 def render_status_badge(status):
-    color = status_color(status)
-    return f"<span style='background:{color};color:white;padding:2px 8px;border-radius:999px;font-size:12px;'>" \
-           f"{status.title()}</span>"
+    safe_status = str(status).strip().lower() or "learning"
+    return f"<span class='status-pill status-{safe_status}'>{safe_status.title()}</span>"
 
 
 def render_dashboard(data):
@@ -341,28 +340,55 @@ def render_dashboard(data):
         elif practice_unlocks(chapter):
             due = True
         status_badge = render_status_badge(chapter["status"])
+        due_badge = ""
+        if overdue:
+            due_badge = "<span class='due-pill due-overdue'>Overdue</span>"
+        elif due:
+            due_badge = "<span class='due-pill due-today'>Due Today</span>"
+
+        sessions_done = len(chapter.get("practice_sessions", []))
+        sheet_pct = round(sheet_progress(chapter) * 100)
+        progress_pct = min(round((sessions_done / 4) * 100), 100)
+
         with st.container():
             st.markdown(
                 f"""
-                <div class='chapter-card'>
-                    <div style='display:flex;justify-content:space-between;align-items:center;gap:8px;'>
-                        <div style='font-weight:700;font-size:17px;'>{chapter['chapter_name']}</div>
-                        <div>{status_badge}</div>
+                <div class='chapter-card chapter-card-compact'>
+                    <div class='chapter-card-top'>
+                        <div class='chapter-title'>{chapter['chapter_name']}</div>
+                        <div class='chapter-pills'>{status_badge}{due_badge}</div>
                     </div>
-                    <div style='margin-top:8px;font-size:14px;color:#475569;'>
-                        Last accuracy: <strong style='color:#0f172a;'>{last_accuracy if last_accuracy is not None else '-'}</strong>
-                        &nbsp;|&nbsp; Next practice: <strong style='color:#0f172a;'>{format_date(next_date)}</strong>
+
+                    <div class='chapter-grid'>
+                        <div class='stat-chip'>
+                            <span class='stat-label'>Last Accuracy</span>
+                            <span class='stat-value'>{last_accuracy if last_accuracy is not None else '-'}%</span>
+                        </div>
+                        <div class='stat-chip'>
+                            <span class='stat-label'>Next Practice</span>
+                            <span class='stat-value'>{format_date(next_date)}</span>
+                        </div>
+                        <div class='stat-chip'>
+                            <span class='stat-label'>Sessions Done</span>
+                            <span class='stat-value'>{sessions_done}</span>
+                        </div>
+                        <div class='stat-chip'>
+                            <span class='stat-label'>Sheet Progress</span>
+                            <span class='stat-value'>{sheet_pct}%</span>
+                        </div>
+                    </div>
+
+                    <div class='progress-row'>
+                        <span class='progress-label'>Cycle Progress</span>
+                        <span class='progress-value'>{progress_pct}%</span>
+                    </div>
+                    <div class='progress-track'>
+                        <div class='progress-fill' style='width: {progress_pct}%;'></div>
                     </div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
-            if due:
-                st.info("Due today")
-            if overdue:
-                st.warning("Overdue")
-            progress = min(len(chapter["practice_sessions"]) / 4, 1.0)
-            st.progress(progress)
 
 
 def render_maintenance_view(data):
@@ -443,24 +469,6 @@ def render_chapter_table(data):
                     st.session_state["show_add_chapter"] = False
                     st.rerun()
 
-    headers = [
-        "Chapter Name",
-        "Subject",
-        "Status",
-        "Lectures Watched",
-        "Sheet Size",
-        "Questions Solved",
-        "Remaining",
-        "Sheet Progress %",
-        "Last Accuracy",
-        "Sessions Done",
-        "Next Practice Date",
-        "Actions",
-    ]
-    header_cols = st.columns(len(headers))
-    for col, label in zip(header_cols, headers):
-        col.markdown(f"<span style='font-weight:600;color:#374151;'>{label}</span>", unsafe_allow_html=True)
-
     for chapter in data["chapters"]:
         chapter_name = chapter["chapter_name"]
         last_accuracy = chapter["practice_sessions"][-1]["accuracy"] if chapter["practice_sessions"] else None
@@ -469,21 +477,39 @@ def render_chapter_table(data):
         completed = int(chapter.get("questions_completed_total", 0) or 0)
         remaining = max(sheet_total - completed, 0)
         progress_pct = round(sheet_progress(chapter) * 100, 2)
-        row_cols = st.columns(len(headers))
-        row_cols[0].write(chapter_name)
-        row_cols[1].write(chapter.get("subject", "Maths"))
-        row_cols[2].write(chapter.get("status", "learning"))
-        row_cols[3].write(chapter.get("total_lectures_watched", 0))
-        row_cols[4].write(sheet_total)
-        row_cols[5].write(completed)
-        row_cols[6].write(remaining)
-        row_cols[7].write(progress_pct)
-        row_cols[8].write(last_accuracy if last_accuracy is not None else "-")
-        row_cols[9].write(len(chapter.get("practice_sessions", [])))
-        row_cols[10].write(format_date(next_date))
 
-        if row_cols[11].button("✏️", key=f"edit_{chapter_name}"):
+        st.markdown(
+            f"""
+            <div class='chapter-table-card'>
+                <div class='chapter-card-top'>
+                    <div class='chapter-title'>{chapter_name}</div>
+                    <div class='chapter-pills'>
+                        <span class='status-pill subject-pill'>{chapter.get('subject', 'Maths')}</span>
+                        {render_status_badge(chapter.get('status', 'learning'))}
+                    </div>
+                </div>
+
+                <div class='chapter-grid'>
+                    <div class='stat-chip'><span class='stat-label'>Lectures</span><span class='stat-value'>{chapter.get('total_lectures_watched', 0)}</span></div>
+                    <div class='stat-chip'><span class='stat-label'>Sheet Size</span><span class='stat-value'>{sheet_total}</span></div>
+                    <div class='stat-chip'><span class='stat-label'>Solved</span><span class='stat-value'>{completed}</span></div>
+                    <div class='stat-chip'><span class='stat-label'>Remaining</span><span class='stat-value'>{remaining}</span></div>
+                    <div class='stat-chip'><span class='stat-label'>Sheet Progress</span><span class='stat-value'>{progress_pct}%</span></div>
+                    <div class='stat-chip'><span class='stat-label'>Last Accuracy</span><span class='stat-value'>{last_accuracy if last_accuracy is not None else '-'}%</span></div>
+                    <div class='stat-chip'><span class='stat-label'>Sessions</span><span class='stat-value'>{len(chapter.get('practice_sessions', []))}</span></div>
+                    <div class='stat-chip'><span class='stat-label'>Next Practice</span><span class='stat-value'>{format_date(next_date)}</span></div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        action_cols = st.columns([1, 1, 8])
+        if action_cols[0].button("✏️ Edit", key=f"edit_{chapter_name}"):
             st.session_state["edit_chapter"] = chapter_name
+
+        if action_cols[1].button("🗑️ Delete", key=f"delete_{chapter_name}"):
+            st.session_state["delete_chapter"] = chapter_name
 
         if st.session_state.get("edit_chapter") == chapter_name:
             with st.form(f"edit_form_{chapter_name}"):
@@ -514,9 +540,6 @@ def render_chapter_table(data):
                         st.session_state["edit_chapter"] = None
                         st.rerun()
 
-            if st.button("Delete", key=f"delete_{chapter_name}"):
-                st.session_state["delete_chapter"] = chapter_name
-
         if st.session_state.get("delete_chapter") == chapter_name:
             st.warning(f"Delete '{chapter_name}'? This cannot be undone.")
             confirm_cols = st.columns(2)
@@ -529,6 +552,8 @@ def render_chapter_table(data):
                 st.rerun()
             if confirm_cols[1].button("Cancel", key=f"cancel_delete_{chapter_name}"):
                 st.session_state["delete_chapter"] = None
+
+        st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
 
 
 def main():
@@ -612,6 +637,163 @@ def main():
             padding: 14px;
             margin-bottom: 10px;
             box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
+        }
+
+        .chapter-table-card {
+            background: var(--card-bg);
+            border: 1px solid #d5e3ef;
+            border-radius: 14px;
+            padding: 14px;
+            margin-bottom: 8px;
+            box-shadow: 0 10px 24px rgba(14, 30, 66, 0.08);
+        }
+
+        .chapter-card-compact {
+            border-color: #d5e3ef;
+            box-shadow: 0 10px 24px rgba(14, 30, 66, 0.08);
+        }
+
+        .chapter-card-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 10px;
+        }
+
+        .chapter-title {
+            font-weight: 800;
+            font-size: 17px;
+            color: #0b1220;
+            letter-spacing: 0.1px;
+        }
+
+        .chapter-pills {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        .status-pill,
+        .due-pill {
+            display: inline-flex;
+            align-items: center;
+            border-radius: 999px;
+            padding: 4px 10px;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.4px;
+            text-transform: uppercase;
+        }
+
+        .subject-pill {
+            background: rgba(15, 118, 110, 0.12);
+            color: #0f766e;
+            border: 1px solid rgba(15, 118, 110, 0.28);
+        }
+
+        .status-learning {
+            background: rgba(47, 111, 235, 0.14);
+            color: #1d4ed8;
+            border: 1px solid rgba(47, 111, 235, 0.3);
+        }
+
+        .status-active {
+            background: rgba(240, 136, 0, 0.16);
+            color: #b45309;
+            border: 1px solid rgba(240, 136, 0, 0.35);
+        }
+
+        .status-maintenance {
+            background: rgba(46, 160, 67, 0.15);
+            color: #166534;
+            border: 1px solid rgba(46, 160, 67, 0.35);
+        }
+
+        .due-today {
+            background: rgba(14, 165, 233, 0.15);
+            color: #0369a1;
+            border: 1px solid rgba(14, 165, 233, 0.32);
+        }
+
+        .due-overdue {
+            background: rgba(239, 68, 68, 0.15);
+            color: #b91c1c;
+            border: 1px solid rgba(239, 68, 68, 0.32);
+        }
+
+        .chapter-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .stat-chip {
+            background: rgba(248, 250, 252, 0.9);
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 8px 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 8px;
+        }
+
+        .stat-label {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #64748b;
+            font-weight: 700;
+        }
+
+        .stat-value {
+            font-size: 14px;
+            color: #0f172a;
+            font-weight: 800;
+        }
+
+        .progress-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+
+        .progress-label {
+            color: #475569;
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .progress-value {
+            color: #0f172a;
+            font-size: 12px;
+            font-weight: 800;
+        }
+
+        .progress-track {
+            height: 8px;
+            width: 100%;
+            border-radius: 999px;
+            background: #e2e8f0;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #0f766e, #0ea5e9);
+        }
+
+        @media (max-width: 900px) {
+            .chapter-grid {
+                grid-template-columns: 1fr;
+            }
         }
         </style>
         """,
