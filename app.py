@@ -52,6 +52,7 @@ def empty_data():
 
 def ensure_chapter_fields(chapter):
     changed = False
+    nullable_fields = {"next_practice_date", "first_lecture_date"}
     defaults = {
         "chapter_name": "",
         "total_lectures_watched": 0,
@@ -67,7 +68,10 @@ def ensure_chapter_fields(chapter):
         "questions_completed_total": 0,
     }
     for key, value in defaults.items():
-        if key not in chapter or chapter[key] is None:
+        if key not in chapter:
+            chapter[key] = value
+            changed = True
+        elif chapter[key] is None and key not in nullable_fields:
             chapter[key] = value
             changed = True
     if not chapter.get("subject"):
@@ -112,6 +116,13 @@ def save_data(data, creating=False):
     if not creating:
         payload["sha"] = st.session_state.get("github_sha")
     response = requests.put(url, headers=github_headers(token), json=payload, timeout=20)
+    if response.status_code == 409 and not creating:
+        latest_url = f"https://api.github.com/repos/{owner}/{REPO_NAME}/contents/{DATA_PATH}?ref={BRANCH}"
+        latest = requests.get(latest_url, headers=github_headers(token), timeout=20)
+        if latest.status_code == 200:
+            st.session_state["github_sha"] = latest.json().get("sha")
+            payload["sha"] = st.session_state.get("github_sha")
+            response = requests.put(url, headers=github_headers(token), json=payload, timeout=20)
     if response.status_code in (200, 201):
         st.session_state["github_sha"] = response.json().get("content", {}).get("sha")
         # Keep in-memory state aligned with the latest successful save.
