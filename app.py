@@ -331,6 +331,29 @@ def render_maintenance_view(data):
         )
 
 
+def render_practice_history(chapter):
+    st.markdown("### Practice History")
+    sessions = chapter.get("practice_sessions", [])
+    if not sessions:
+        st.caption("No practice sessions logged yet for this chapter.")
+        return
+
+    for session in reversed(sessions):
+        title = (
+            f"{session.get('date', '-')} | "
+            f"Accuracy: {session.get('accuracy', '-')}% | "
+            f"Attempted: {session.get('questions_attempted', '-')}"
+        )
+        with st.expander(title):
+            detail_cols = st.columns(3)
+            detail_cols[0].write(f"Correct: {session.get('correct', '-')}")
+            detail_cols[1].write(f"Attempted: {session.get('questions_attempted', '-')}")
+            detail_cols[2].write(f"Accuracy: {session.get('accuracy', '-')}%")
+
+            st.markdown("**Notes**")
+            st.write(session.get("notes") or "No notes added.")
+
+
 def render_chapter_table(data):
     st.subheader("Chapter Table")
     if "show_add_chapter" not in st.session_state:
@@ -536,6 +559,11 @@ def main():
                 save_data(data)
                 st.success(f"Logged session. Accuracy: {accuracy}%")
                 st.rerun()
+
+            st.divider()
+            selected_chapter = get_chapter(data, chapter_name)
+            if selected_chapter:
+                render_practice_history(selected_chapter)
 
     with tabs[3]:
         render_maintenance_view(data)
