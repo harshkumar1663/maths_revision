@@ -114,6 +114,8 @@ def save_data(data, creating=False):
     response = requests.put(url, headers=github_headers(token), json=payload, timeout=20)
     if response.status_code in (200, 201):
         st.session_state["github_sha"] = response.json().get("content", {}).get("sha")
+        # Keep in-memory state aligned with the latest successful save.
+        st.session_state["data"] = data
         return
     st.error(f"Failed to save: {response.status_code}")
     st.stop()
@@ -497,7 +499,9 @@ def main():
         unsafe_allow_html=True,
     )
 
-    data = load_data()
+    if "data" not in st.session_state:
+        st.session_state["data"] = load_data()
+    data = st.session_state["data"]
     updated = False
     for chapter in data["chapters"]:
         if ensure_chapter_fields(chapter):
@@ -513,52 +517,56 @@ def main():
 
     with tabs[1]:
         st.subheader("Add / Update Lecture")
-        names = [c["chapter_name"] for c in data["chapters"]]
-        selection = st.selectbox("Chapter", ["New chapter..."] + names)
-        chapter_name = st.text_input("New chapter name") if selection == "New chapter..." else selection
-        lectures = st.number_input("Lectures watched today", min_value=0, max_value=10, value=0, step=1)
-        if st.button("Update lectures"):
-            if not chapter_name:
-                st.error("Chapter name is required.")
-            else:
-                chapter = ensure_chapter(data, chapter_name)
-                lecture_logged = record_lecture(chapter, int(lectures))
-                adjust_next_practice_for_lecture(chapter, lecture_logged)
-                save_data(data)
-                st.success("Lecture count updated.")
-                st.rerun()
+        with st.form("update_lecture_form"):
+            names = [c["chapter_name"] for c in data["chapters"]]
+            selection = st.selectbox("Chapter", ["New chapter..."] + names)
+            chapter_name = st.text_input("New chapter name") if selection == "New chapter..." else selection
+            lectures = st.number_input("Lectures watched today", min_value=0, max_value=10, value=0, step=1)
+            submit_lecture = st.form_submit_button("Update lectures")
+            if submit_lecture:
+                if not chapter_name:
+                    st.error("Chapter name is required.")
+                else:
+                    chapter = ensure_chapter(data, chapter_name)
+                    lecture_logged = record_lecture(chapter, int(lectures))
+                    adjust_next_practice_for_lecture(chapter, lecture_logged)
+                    save_data(data)
+                    st.success("Lecture count updated.")
+                    st.rerun()
 
     with tabs[2]:
         st.subheader("Log Practice")
         if not data["chapters"]:
             st.info("Add a chapter first.")
         else:
-            chapter_name = st.selectbox("Chapter", [c["chapter_name"] for c in data["chapters"]])
-            questions = st.number_input("Questions attempted", min_value=1, value=15, step=1)
-            correct = st.number_input("Correct answers", min_value=0, value=10, step=1)
-            notes = st.text_area("Notes (optional)")
-            if st.button("Log session"):
-                chapter = get_chapter(data, chapter_name)
-                if correct > questions:
-                    st.error("Correct answers cannot exceed questions attempted.")
-                    st.stop()
-                accuracy = round((correct / questions) * 100, 2)
-                chapter["practice_sessions"].append(
-                    {
-                        "date": today_str(),
-                        "questions_attempted": int(questions),
-                        "correct": int(correct),
-                        "accuracy": accuracy,
-                        "notes": notes.strip() or None,
-                    }
-                )
-                chapter["questions_completed_total"] = int(chapter.get("questions_completed_total", 0) or 0) + int(questions)
-                chapter["current_sheet_index"] = chapter.get("current_sheet_index", 0) + 1
-                update_status_after_session(chapter, accuracy)
-                set_next_practice_date(chapter, accuracy)
-                save_data(data)
-                st.success(f"Logged session. Accuracy: {accuracy}%")
-                st.rerun()
+            with st.form("log_practice_form"):
+                chapter_name = st.selectbox("Chapter", [c["chapter_name"] for c in data["chapters"]])
+                questions = st.number_input("Questions attempted", min_value=1, value=15, step=1)
+                correct = st.number_input("Correct answers", min_value=0, value=10, step=1)
+                notes = st.text_area("Notes (optional)")
+                submit_practice = st.form_submit_button("Log session")
+                if submit_practice:
+                    chapter = get_chapter(data, chapter_name)
+                    if correct > questions:
+                        st.error("Correct answers cannot exceed questions attempted.")
+                        st.stop()
+                    accuracy = round((correct / questions) * 100, 2)
+                    chapter["practice_sessions"].append(
+                        {
+                            "date": today_str(),
+                            "questions_attempted": int(questions),
+                            "correct": int(correct),
+                            "accuracy": accuracy,
+                            "notes": notes.strip() or None,
+                        }
+                    )
+                    chapter["questions_completed_total"] = int(chapter.get("questions_completed_total", 0) or 0) + int(questions)
+                    chapter["current_sheet_index"] = chapter.get("current_sheet_index", 0) + 1
+                    update_status_after_session(chapter, accuracy)
+                    set_next_practice_date(chapter, accuracy)
+                    save_data(data)
+                    st.success(f"Logged session. Accuracy: {accuracy}%")
+                    st.rerun()
 
             st.divider()
             selected_chapter = get_chapter(data, chapter_name)
