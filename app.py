@@ -66,6 +66,7 @@ def ensure_chapter_fields(chapter):
         "subject": "Maths",
         "sheet_total": 0,
         "questions_completed_total": 0,
+        "force_maintenance": False,
     }
     for key, value in defaults.items():
         if key not in chapter:
@@ -79,6 +80,35 @@ def ensure_chapter_fields(chapter):
         changed = True
     if not isinstance(chapter.get("practice_sessions"), list):
         chapter["practice_sessions"] = []
+        changed = True
+
+    # Normalize sheet counters so lifecycle checks are consistent for legacy/corrected data.
+    try:
+        sheet_total = int(chapter.get("sheet_total", 0) or 0)
+    except (TypeError, ValueError):
+        sheet_total = 0
+    if sheet_total < 0:
+        sheet_total = 0
+    if chapter.get("sheet_total") != sheet_total:
+        chapter["sheet_total"] = sheet_total
+        changed = True
+
+    try:
+        completed = int(chapter.get("questions_completed_total", 0) or 0)
+    except (TypeError, ValueError):
+        completed = 0
+    if completed < 0:
+        completed = 0
+    if sheet_total == 0:
+        normalized_completed = 0
+    else:
+        normalized_completed = min(completed, sheet_total)
+    if chapter.get("questions_completed_total") != normalized_completed:
+        chapter["questions_completed_total"] = normalized_completed
+        changed = True
+
+    if not isinstance(chapter.get("force_maintenance"), bool):
+        chapter["force_maintenance"] = bool(chapter.get("force_maintenance"))
         changed = True
     return changed
 
@@ -157,9 +187,22 @@ def ensure_chapter(data, name):
         "subject": "Maths",
         "sheet_total": 0,
         "questions_completed_total": 0,
+        "force_maintenance": False,
     }
     data["chapters"].append(chapter)
     return chapter
+
+
+def normalized_sheet_counts(chapter):
+    sheet_total = int(chapter.get("sheet_total", 0) or 0)
+    completed = int(chapter.get("questions_completed_total", 0) or 0)
+    sheet_total = max(sheet_total, 0)
+    completed = max(completed, 0)
+    if sheet_total == 0:
+        completed = 0
+    else:
+        completed = min(completed, sheet_total)
+    return sheet_total, completed
 
 
 def record_lecture(chapter, lectures):
@@ -226,16 +269,14 @@ def spacing_days(accuracy):
 
 
 def sheet_progress(chapter):
-    sheet_total = int(chapter.get("sheet_total", 0) or 0)
-    completed = int(chapter.get("questions_completed_total", 0) or 0)
+    sheet_total, completed = normalized_sheet_counts(chapter)
     if sheet_total <= 0:
         return 0.0
     return min(completed / sheet_total, 1.0)
 
 
 def sheet_completed(chapter):
-    sheet_total = int(chapter.get("sheet_total", 0) or 0)
-    completed = int(chapter.get("questions_completed_total", 0) or 0)
+    sheet_total, completed = normalized_sheet_counts(chapter)
     return sheet_total > 0 and completed >= sheet_total
 
 
@@ -245,7 +286,19 @@ def update_status_after_session(chapter, accuracy):
         chapter["status"] = "active"
         chapter["maintenance_stage"] = 0
         return
-    if len(sessions) >= 3 and accuracy >= 80 and sheet_progress(chapter) >= 0.7:
+
+    if chapter.get("force_maintenance"):
+        chapter["status"] = "maintenance"
+        chapter["maintenance_stage"] = 0
+        return
+
+    if (
+        len(sessions) >= 3
+        and sheet_completed(chapter)
+        and len(sessions) >= 2
+        and sessions[-1]["accuracy"] >= 80
+        and sessions[-2]["accuracy"] >= 80
+    ):
         chapter["status"] = "maintenance"
         chapter["maintenance_stage"] = 0
         return
@@ -560,6 +613,11 @@ def render_chapter_table(data):
                                                 value=int(chapter.get("total_lectures_watched", 0)))
                 edit_questions = st.number_input("Questions solved correction", min_value=0, step=1,
                                                  value=completed)
+                edit_force_maintenance = st.checkbox(
+                    "Force maintenance",
+                    value=bool(chapter.get("force_maintenance", False)),
+                    help="Manually keep this chapter in maintenance mode.",
+                )
                 saved = st.form_submit_button("Save")
                 if saved:
                     if not edit_name.strip():
@@ -572,6 +630,8 @@ def render_chapter_table(data):
                         chapter["sheet_total"] = int(edit_sheet_total)
                         chapter["total_lectures_watched"] = int(edit_lectures)
                         chapter["questions_completed_total"] = int(edit_questions)
+                        chapter["force_maintenance"] = bool(edit_force_maintenance)
+                        ensure_chapter_fields(chapter)
                         sort_chapters(data)
                         save_data(data)
                         st.success("Chapter updated.")
