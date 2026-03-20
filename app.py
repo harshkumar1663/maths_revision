@@ -167,6 +167,23 @@ def ensure_chapter_fields(chapter):
             chapter["current_question_set"] = []
             changed = True
 
+    # PART 1: Remove ghost/invalid dates from chapters with no activity.
+    # If no practice sessions AND no lecture dates exist, reset scheduling.
+    has_practice_sessions = bool(chapter.get("practice_sessions"))
+    has_lecture_dates = bool(chapter.get("lecture_dates"))
+    if not has_practice_sessions and not has_lecture_dates:
+        if chapter.get("next_practice_date") is not None:
+            chapter["next_practice_date"] = None
+            changed = True
+    
+    # Also validate next_practice_date format if it exists.
+    next_date_str = chapter.get("next_practice_date")
+    if next_date_str is not None and isinstance(next_date_str, str):
+        # Try to parse it; if invalid, reset to None.
+        if parse_date(next_date_str) is None:
+            chapter["next_practice_date"] = None
+            changed = True
+
     return changed
 
 
@@ -341,6 +358,13 @@ def record_lecture(chapter, lectures):
         chapter.setdefault("lecture_dates", []).append(today)
     if not chapter.get("first_lecture_date"):
         chapter["first_lecture_date"] = today
+    
+    # PART 2: Auto-schedule chapter when practice unlocks after logging lecture.
+    # If practice is now unlocked and chapter has no next_practice_date, schedule it.
+    if practice_unlocks(chapter) and chapter.get("next_practice_date") is None:
+        tomorrow = (date.today() + timedelta(days=1)).strftime("%d-%m-%y")
+        chapter["next_practice_date"] = tomorrow
+    
     return True
 
 
@@ -361,6 +385,21 @@ def adjust_next_practice_for_lecture(chapter, lecture_logged):
     if tightened < today:
         tightened = today
     chapter["next_practice_date"] = tightened.strftime("%d-%m-%y")
+
+
+def ensure_initial_schedule(chapter):
+    """
+    PART 3: Guarantee scheduling consistency.
+    If a chapter has no next_practice_date but practice is unlocked,
+    automatically schedule it for tomorrow.
+    This prevents chapters from remaining unscheduled.
+    """
+    if chapter.get("next_practice_date") is None:
+        if practice_unlocks(chapter):
+            tomorrow = (date.today() + timedelta(days=1)).strftime("%d-%m-%y")
+            chapter["next_practice_date"] = tomorrow
+            return True
+    return False
 
 
 def has_consecutive_lecture_days(chapter):
@@ -602,6 +641,26 @@ def render_dashboard(data):
             "</div>"
         )
         st.markdown(card_html, unsafe_allow_html=True)
+    
+    # PART 6: Optional debug display for scheduling (if toggle is active).
+    if st.session_state.get("debug_schedule", False):
+        st.divider()
+        with st.expander("🔍 Debug: Scheduling Details"):
+            debug_data = []
+            for chapter in data["chapters"]:
+                next_date = parse_date(chapter.get("next_practice_date"))
+                overdue_days = None
+                if next_date and next_date < today:
+                    overdue_days = (today - next_date).days
+                debug_data.append({
+                    "Chapter": chapter["chapter_name"],
+                    "Next Practice": format_date(next_date),
+                    "Status": chapter.get("status", "learning").title(),
+                    "Overdue Days": overdue_days if overdue_days else "-",
+                    "Unlocked": "Yes" if practice_unlocks(chapter) else "No",
+                    "Sessions": len(chapter.get("practice_sessions", [])),
+                })
+            st.dataframe(debug_data, use_container_width=True)
 
 
 def render_maintenance_view(data):
@@ -1378,6 +1437,24 @@ def main():
     if updated or enforced:
         save_data(data)
     sort_chapters(data)
+    
+    # PART 3: Ensure all chapters are scheduled after initial load + sort.
+    all_scheduled = False
+    for chapter in data["chapters"]:
+        if ensure_initial_schedule(chapter):
+            all_scheduled = True
+    if all_scheduled:
+        save_data(data)
+    
+    # PART 4: Show visibility warning if overdue enforcement was triggered.
+    if enforced:
+        st.warning("⚠️  **Overdue Chapters Alert:** Some chapters were past their practice date. System has auto-rescheduled them. Check the Dashboard for details.")
+    
+    # Optional: Add debug toggle for scheduling visibility (PART 6).
+    if "debug_schedule" not in st.session_state:
+        st.session_state["debug_schedule"] = False
+    debug_mode = st.sidebar.checkbox("🔍 Debug: Show Scheduling Info", value=st.session_state["debug_schedule"])
+    st.session_state["debug_schedule"] = debug_mode
 
     tabs = st.tabs(["Dashboard", "Add / Update Lecture", "Log Practice", "Maintenance View", "Chapter Table"])
 
