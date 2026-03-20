@@ -1,5 +1,6 @@
 import base64
 import json
+import random
 from datetime import date, datetime, timedelta
 
 import requests
@@ -52,7 +53,11 @@ def empty_data():
 
 def ensure_chapter_fields(chapter):
     changed = False
-    nullable_fields = {"next_practice_date", "first_lecture_date"}
+    nullable_fields = {
+        "next_practice_date",
+        "first_lecture_date",
+        "last_overdue_enforced_on",
+    }
     defaults = {
         "chapter_name": "",
         "total_lectures_watched": 0,
@@ -67,6 +72,10 @@ def ensure_chapter_fields(chapter):
         "sheet_total": 0,
         "questions_completed_total": 0,
         "force_maintenance": False,
+        "used_question_numbers": [],
+        "current_question_set": [],
+        "question_set_size": 15,
+        "last_overdue_enforced_on": None,
     }
     for key, value in defaults.items():
         if key not in chapter:
@@ -110,6 +119,54 @@ def ensure_chapter_fields(chapter):
     if not isinstance(chapter.get("force_maintenance"), bool):
         chapter["force_maintenance"] = bool(chapter.get("force_maintenance"))
         changed = True
+
+    try:
+        set_size = int(chapter.get("question_set_size", 15) or 15)
+    except (TypeError, ValueError):
+        set_size = 15
+    set_size = max(set_size, 1)
+    if chapter.get("question_set_size") != set_size:
+        chapter["question_set_size"] = set_size
+        changed = True
+
+    def sanitize_question_numbers(values):
+        cleaned = []
+        seen = set()
+        if not isinstance(values, list):
+            return cleaned
+        for raw in values:
+            try:
+                number = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if number < 1:
+                continue
+            if sheet_total > 0 and number > sheet_total:
+                continue
+            if number in seen:
+                continue
+            seen.add(number)
+            cleaned.append(number)
+        return cleaned
+
+    normalized_used = sanitize_question_numbers(chapter.get("used_question_numbers", []))
+    if chapter.get("used_question_numbers") != normalized_used:
+        chapter["used_question_numbers"] = normalized_used
+        changed = True
+
+    normalized_current = sanitize_question_numbers(chapter.get("current_question_set", []))
+    if chapter.get("current_question_set") != normalized_current:
+        chapter["current_question_set"] = normalized_current
+        changed = True
+
+    if sheet_total == 0:
+        if chapter.get("used_question_numbers"):
+            chapter["used_question_numbers"] = []
+            changed = True
+        if chapter.get("current_question_set"):
+            chapter["current_question_set"] = []
+            changed = True
+
     return changed
 
 
@@ -188,6 +245,10 @@ def ensure_chapter(data, name):
         "sheet_total": 0,
         "questions_completed_total": 0,
         "force_maintenance": False,
+        "used_question_numbers": [],
+        "current_question_set": [],
+        "question_set_size": 15,
+        "last_overdue_enforced_on": None,
     }
     data["chapters"].append(chapter)
     return chapter
@@ -203,6 +264,77 @@ def normalized_sheet_counts(chapter):
     else:
         completed = min(completed, sheet_total)
     return sheet_total, completed
+
+
+def generate_question_set(chapter):
+    sheet_total, _ = normalized_sheet_counts(chapter)
+    if sheet_total <= 0:
+        return False, "Set sheet size before generating a question set."
+
+    try:
+        set_size = int(chapter.get("question_set_size", 15) or 15)
+    except (TypeError, ValueError):
+        set_size = 15
+    set_size = max(1, min(set_size, sheet_total))
+    chapter["question_set_size"] = set_size
+
+    used = []
+    for value in chapter.get("used_question_numbers", []):
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= number <= sheet_total:
+            used.append(number)
+
+    current_set = []
+    for value in chapter.get("current_question_set", []):
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= number <= sheet_total:
+            current_set.append(number)
+    if current_set:
+        # Regeneration replaces the pending set, so reclaim those numbers first.
+        current_lookup = set(current_set)
+        used = [number for number in used if number not in current_lookup]
+
+    used_lookup = set(used)
+    remaining = [number for number in range(1, sheet_total + 1) if number not in used_lookup]
+    if len(remaining) < set_size:
+        used = []
+        remaining = list(range(1, sheet_total + 1))
+
+    selected = sorted(random.sample(remaining, set_size))
+    chapter["current_question_set"] = selected
+    chapter["used_question_numbers"] = used + selected
+    return True, None
+
+
+def apply_overdue_enforcement(chapter):
+    next_date = parse_date(chapter.get("next_practice_date"))
+    if not next_date:
+        return False
+
+    today = date.today()
+    overdue_days = (today - next_date).days
+    if overdue_days <= 0:
+        return False
+    if overdue_days <= 7:
+        return False
+
+    overdue_marker = next_date.strftime("%d-%m-%y")
+    if chapter.get("last_overdue_enforced_on") == overdue_marker:
+        return False
+
+    if chapter.get("status") == "maintenance":
+        chapter["status"] = "active"
+        chapter["maintenance_stage"] = 0
+
+    chapter["next_practice_date"] = (today + timedelta(days=1)).strftime("%d-%m-%y")
+    chapter["last_overdue_enforced_on"] = overdue_marker
+    return True
 
 
 def record_lecture(chapter, lectures):
@@ -594,7 +726,29 @@ def render_chapter_table(data):
             f"<div class='table-row-cell'>{len(chapter.get('practice_sessions', []))}</div>",
             unsafe_allow_html=True,
         )
-        row_cols[9].markdown(f"<div class='table-row-cell'>{format_date(next_date)}</div>", unsafe_allow_html=True)
+        practice_items = "".join(
+            f"<li>{session.get('date', '-')} ({session.get('accuracy', '-')}%)</li>"
+            for session in chapter.get("practice_sessions", [])
+        )
+        if not practice_items:
+            practice_items = "<li>No sessions yet</li>"
+        maintenance_meta = ""
+        if chapter.get("status") == "maintenance":
+            maintenance_meta = f"<div>Maintenance Stage: {int(chapter.get('maintenance_stage', 0) or 0)}</div>"
+
+        timeline_html = (
+            "<div class='next-hover-wrapper'>"
+            f"{format_date(next_date)}"
+            "<div class='timeline-hover'>"
+            f"<div><strong>First Lecture:</strong> {format_date(parse_date(chapter.get('first_lecture_date')))}</div>"
+            "<div style='margin-top:6px;'><strong>Practice Sessions:</strong></div>"
+            f"<ul>{practice_items}</ul>"
+            f"<div><strong>Status:</strong> {chapter.get('status', 'learning').title()}</div>"
+            f"{maintenance_meta}"
+            "</div>"
+            "</div>"
+        )
+        row_cols[9].markdown(f"<div class='table-row-cell'>{timeline_html}</div>", unsafe_allow_html=True)
 
         action_cell = row_cols[10].columns(2)
         if action_cell[0].button("✏️", key=f"edit_{chapter_name}"):
@@ -1100,6 +1254,60 @@ def main():
             background: linear-gradient(90deg, #0f766e, #0ea5e9);
         }
 
+        .question-pill-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .question-pill {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 999px;
+            padding: 6px 10px;
+            font-size: 12px;
+            font-weight: 800;
+            color: #0f172a;
+            background: rgba(240, 249, 255, 0.95);
+            border: 1px solid #bae6fd;
+        }
+
+        .next-hover-wrapper {
+            position: relative;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 70px;
+        }
+
+        .timeline-hover {
+            display: none;
+            position: absolute;
+            top: 22px;
+            left: 0;
+            width: 260px;
+            max-width: 260px;
+            text-align: left;
+            background: white;
+            border: 1px solid #dbe4ee;
+            border-radius: 10px;
+            padding: 10px;
+            box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
+            z-index: 999;
+        }
+
+        .timeline-hover ul {
+            margin: 6px 0;
+            padding-left: 16px;
+        }
+
+        .next-hover-wrapper:hover .timeline-hover {
+            display: block;
+        }
+
         @media (max-width: 900px) {
             .chapter-grid {
                 grid-template-columns: 1fr;
@@ -1124,10 +1332,13 @@ def main():
         st.session_state["data"] = load_data()
     data = st.session_state["data"]
     updated = False
+    enforced = False
     for chapter in data["chapters"]:
         if ensure_chapter_fields(chapter):
             updated = True
-    if updated:
+        if apply_overdue_enforcement(chapter):
+            enforced = True
+    if updated or enforced:
         save_data(data)
     sort_chapters(data)
 
@@ -1205,6 +1416,10 @@ def main():
             if selected_chapter:
                 last_acc = selected_chapter["practice_sessions"][-1]["accuracy"] if selected_chapter["practice_sessions"] else "-"
                 next_practice = format_date(parse_date(selected_chapter.get("next_practice_date")))
+                sheet_total, _ = normalized_sheet_counts(selected_chapter)
+                used_count = len(selected_chapter.get("used_question_numbers", [])) if sheet_total > 0 else 0
+                coverage_pct = round((used_count / sheet_total) * 100, 2) if sheet_total > 0 else 0
+                remaining_unused = max(sheet_total - used_count, 0)
                 st.markdown(
                     f"""
                     <div class='section-inline-card'>
@@ -1212,37 +1427,100 @@ def main():
                         <span class='mini-chip'>Last accuracy: {last_acc}%</span>
                         <span class='mini-chip'>Sessions: {len(selected_chapter.get('practice_sessions', []))}</span>
                         <span class='mini-chip'>Next practice: {next_practice}</span>
+                        <span class='mini-chip'>Coverage: {coverage_pct}%</span>
+                        <span class='mini-chip'>Unused questions: {remaining_unused}</span>
                     </div>
                     """,
                     unsafe_allow_html=True,
                 )
 
+                st.markdown("#### Generate Question Set")
+                max_set_size = sheet_total if sheet_total > 0 else 1
+                configured_default = min(
+                    int(selected_chapter.get("question_set_size", 15) or 15),
+                    max_set_size,
+                )
+                configured_set_size = st.number_input(
+                    "Question set size",
+                    min_value=1,
+                    max_value=max_set_size,
+                    value=configured_default,
+                    step=1,
+                    key=f"question_set_size_{chapter_name}",
+                    disabled=sheet_total <= 0,
+                )
+                if sheet_total > 0 and int(selected_chapter.get("question_set_size", 15) or 15) != int(configured_set_size):
+                    selected_chapter["question_set_size"] = int(configured_set_size)
+                    save_data(data)
+                    st.rerun()
+
+                action_cols = st.columns([1, 1, 2])
+                if action_cols[0].button("Generate Practice Set", key=f"generate_set_{chapter_name}"):
+                    selected_chapter["question_set_size"] = int(configured_set_size)
+                    ok, message = generate_question_set(selected_chapter)
+                    if not ok:
+                        st.error(message)
+                    else:
+                        save_data(data)
+                        st.success("Practice set generated.")
+                        st.rerun()
+
+                if action_cols[1].button(
+                    "Regenerate Set",
+                    key=f"regenerate_set_{chapter_name}",
+                    disabled=not bool(selected_chapter.get("current_question_set")),
+                ):
+                    selected_chapter["question_set_size"] = int(configured_set_size)
+                    ok, message = generate_question_set(selected_chapter)
+                    if not ok:
+                        st.error(message)
+                    else:
+                        save_data(data)
+                        st.success("Practice set regenerated.")
+                        st.rerun()
+
+                current_set = selected_chapter.get("current_question_set", [])
+                if current_set:
+                    pills = "".join(f"<span class='question-pill'>Q{num}</span>" for num in current_set)
+                    st.markdown(f"<div class='question-pill-grid'>{pills}</div>", unsafe_allow_html=True)
+                else:
+                    st.info("Generate a practice set to start logging this session.")
+
+            st.markdown("#### Log Results")
+            current_set = selected_chapter.get("current_question_set", []) if selected_chapter else []
+            attempted = len(current_set)
+            if attempted:
+                st.caption(f"Questions attempted are fixed to the generated set size: {attempted}")
             with st.form("log_practice_form"):
-                input_cols = st.columns(2)
-                with input_cols[0]:
-                    questions = st.number_input("Questions attempted", min_value=1, value=15, step=1)
-                with input_cols[1]:
-                    correct = st.number_input("Correct answers", min_value=0, value=10, step=1)
-                notes = st.text_area("Notes (optional)", placeholder="Weak topics, mistakes, trick notes, or reminders for next session...")
+                correct = st.number_input(
+                    "Correct answers",
+                    min_value=0,
+                    max_value=attempted if attempted else 0,
+                    value=min(10, attempted) if attempted else 0,
+                    step=1,
+                    disabled=attempted == 0,
+                )
+                notes = st.text_area(
+                    "Notes (optional)",
+                    placeholder="Weak topics, mistakes, trick notes, or reminders for next session...",
+                    disabled=attempted == 0,
+                )
                 st.caption("Tip: Keep notes short and actionable so you can revise them quickly later.")
-                submit_practice = st.form_submit_button("Log session")
+                submit_practice = st.form_submit_button("Log session", disabled=attempted == 0)
                 if submit_practice:
                     chapter = get_chapter(data, chapter_name)
-                    if correct > questions:
-                        st.error("Correct answers cannot exceed questions attempted.")
-                        st.stop()
-                    accuracy = round((correct / questions) * 100, 2)
+                    accuracy = round((correct / attempted) * 100, 2) if attempted else 0
                     chapter["practice_sessions"].append(
                         {
                             "date": today_str(),
-                            "questions_attempted": int(questions),
+                            "questions_attempted": attempted,
                             "correct": int(correct),
                             "accuracy": accuracy,
                             "notes": notes.strip() or None,
                         }
                     )
-                    chapter["questions_completed_total"] = int(chapter.get("questions_completed_total", 0) or 0) + int(questions)
-                    chapter["current_sheet_index"] = chapter.get("current_sheet_index", 0) + 1
+                    chapter["questions_completed_total"] = int(chapter.get("questions_completed_total", 0) or 0) + attempted
+                    chapter["current_question_set"] = []
                     update_status_after_session(chapter, accuracy)
                     set_next_practice_date(chapter, accuracy)
                     save_data(data)
