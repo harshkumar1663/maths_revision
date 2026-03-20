@@ -267,7 +267,7 @@ def normalized_sheet_counts(chapter):
 
 
 def generate_question_set(chapter):
-    sheet_total, _ = normalized_sheet_counts(chapter)
+    sheet_total, completed = normalized_sheet_counts(chapter)
     if sheet_total <= 0:
         return False, "Set sheet size before generating a question set."
 
@@ -277,6 +277,9 @@ def generate_question_set(chapter):
         set_size = 15
     set_size = max(1, min(set_size, sheet_total))
     chapter["question_set_size"] = set_size
+
+    # Legacy progress means questions 1..completed were already solved before random sets existed.
+    base_used = set(range(1, completed + 1)) if 0 < completed < sheet_total else set()
 
     used = []
     for value in chapter.get("used_question_numbers", []):
@@ -300,15 +303,19 @@ def generate_question_set(chapter):
         current_lookup = set(current_set)
         used = [number for number in used if number not in current_lookup]
 
-    used_lookup = set(used)
+    used_lookup = set(used).union(base_used)
     remaining = [number for number in range(1, sheet_total + 1) if number not in used_lookup]
+
     if len(remaining) < set_size:
         used = []
-        remaining = list(range(1, sheet_total + 1))
+        remaining = [number for number in range(1, sheet_total + 1) if number not in base_used]
+
+    if set_size <= 0 or not remaining:
+        return False, "No unused questions available for this chapter."
 
     selected = sorted(random.sample(remaining, set_size))
     chapter["current_question_set"] = selected
-    chapter["used_question_numbers"] = used + selected
+    chapter["used_question_numbers"] = sorted(set(used).union(selected))
     return True, None
 
 
@@ -1459,9 +1466,12 @@ def main():
                 last_acc = selected_chapter["practice_sessions"][-1]["accuracy"] if selected_chapter["practice_sessions"] else "-"
                 next_practice = format_date(parse_date(selected_chapter.get("next_practice_date")))
                 sheet_total, _ = normalized_sheet_counts(selected_chapter)
+                solved_sequential = int(selected_chapter.get("questions_completed_total", 0) or 0)
+                solved_sequential = max(0, min(solved_sequential, sheet_total)) if sheet_total > 0 else 0
                 used_count = len(selected_chapter.get("used_question_numbers", [])) if sheet_total > 0 else 0
-                coverage_pct = round((used_count / sheet_total) * 100, 2) if sheet_total > 0 else 0
-                remaining_unused = max(sheet_total - used_count, 0)
+                effective_used = max(used_count, solved_sequential)
+                coverage_pct = round((effective_used / sheet_total) * 100, 2) if sheet_total > 0 else 0
+                remaining_unused = max(sheet_total - effective_used, 0)
                 st.markdown(
                     f"""
                     <div class='section-inline-card'>
