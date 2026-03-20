@@ -281,6 +281,8 @@ def generate_question_set(chapter):
     # Legacy progress means questions 1..completed were already solved before random sets existed.
     base_used = set(range(1, completed + 1)) if 0 < completed < sheet_total else set()
 
+    # `used_question_numbers` tracks only questions from logged sessions.
+    # Generating a set should not consume them.
     used = []
     for value in chapter.get("used_question_numbers", []):
         try:
@@ -289,19 +291,6 @@ def generate_question_set(chapter):
             continue
         if 1 <= number <= sheet_total:
             used.append(number)
-
-    current_set = []
-    for value in chapter.get("current_question_set", []):
-        try:
-            number = int(value)
-        except (TypeError, ValueError):
-            continue
-        if 1 <= number <= sheet_total:
-            current_set.append(number)
-    if current_set:
-        # Regeneration replaces the pending set, so reclaim those numbers first.
-        current_lookup = set(current_set)
-        used = [number for number in used if number not in current_lookup]
 
     used_lookup = set(used).union(base_used)
     remaining = [number for number in range(1, sheet_total + 1) if number not in used_lookup]
@@ -315,7 +304,6 @@ def generate_question_set(chapter):
 
     selected = sorted(random.sample(remaining, set_size))
     chapter["current_question_set"] = selected
-    chapter["used_question_numbers"] = sorted(set(used).union(selected))
     return True, None
 
 
@@ -1562,6 +1550,19 @@ def main():
                 if submit_practice:
                     chapter = get_chapter(data, chapter_name)
                     accuracy = round((correct / attempted) * 100, 2) if attempted else 0
+                    existing_used = []
+                    for value in chapter.get("used_question_numbers", []):
+                        try:
+                            number = int(value)
+                        except (TypeError, ValueError):
+                            continue
+                        if number > 0:
+                            existing_used.append(number)
+                    consumed_questions = [
+                        int(q)
+                        for q in chapter.get("current_question_set", [])
+                        if isinstance(q, int) or (isinstance(q, str) and q.isdigit())
+                    ]
                     chapter["practice_sessions"].append(
                         {
                             "date": today_str(),
@@ -1570,6 +1571,9 @@ def main():
                             "accuracy": accuracy,
                             "notes": notes.strip() or None,
                         }
+                    )
+                    chapter["used_question_numbers"] = sorted(
+                        set(existing_used).union(consumed_questions)
                     )
                     chapter["questions_completed_total"] = int(chapter.get("questions_completed_total", 0) or 0) + attempted
                     chapter["current_question_set"] = []
