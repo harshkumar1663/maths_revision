@@ -400,6 +400,38 @@ def spacing_days(accuracy):
     return 2
 
 
+def projected_future_practice_dates(chapter, count=3):
+    next_date = parse_date(chapter.get("next_practice_date"))
+    if not next_date or count <= 0:
+        return []
+
+    projections = [next_date]
+    status = chapter.get("status", "learning")
+
+    if status == "maintenance":
+        stage = int(chapter.get("maintenance_stage", 0) or 0)
+        cursor = next_date
+        simulated_stage = stage
+        while len(projections) < count:
+            if simulated_stage <= 0:
+                cursor = cursor + timedelta(days=15)
+                simulated_stage = 1
+            elif simulated_stage == 1:
+                cursor = cursor + timedelta(days=30)
+                simulated_stage = 2
+            else:
+                break
+            projections.append(cursor)
+        return projections
+
+    cursor = next_date
+    optimistic_gap = spacing_days(100)
+    while len(projections) < count:
+        cursor = cursor + timedelta(days=optimistic_gap)
+        projections.append(cursor)
+    return projections
+
+
 def sheet_progress(chapter):
     sheet_total, completed = normalized_sheet_counts(chapter)
     if sheet_total <= 0:
@@ -732,6 +764,14 @@ def render_chapter_table(data):
         )
         if not practice_items:
             practice_items = "<li>No sessions yet</li>"
+
+        projected_items = "".join(
+            f"<li>{format_date(future_date)}</li>"
+            for future_date in projected_future_practice_dates(chapter, count=3)
+        )
+        if not projected_items:
+            projected_items = "<li>No upcoming dates</li>"
+
         maintenance_meta = ""
         if chapter.get("status") == "maintenance":
             maintenance_meta = f"<div>Maintenance Stage: {int(chapter.get('maintenance_stage', 0) or 0)}</div>"
@@ -743,6 +783,8 @@ def render_chapter_table(data):
             f"<div><strong>First Lecture:</strong> {format_date(parse_date(chapter.get('first_lecture_date')))}</div>"
             "<div style='margin-top:6px;'><strong>Practice Sessions:</strong></div>"
             f"<ul>{practice_items}</ul>"
+            "<div style='margin-top:6px;'><strong>Projected Next Dates:</strong></div>"
+            f"<ul>{projected_items}</ul>"
             f"<div><strong>Status:</strong> {chapter.get('status', 'learning').title()}</div>"
             f"{maintenance_meta}"
             "</div>"
