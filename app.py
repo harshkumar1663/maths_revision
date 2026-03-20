@@ -253,7 +253,7 @@ def ensure_chapter(data, name):
         "total_lectures_watched": 0,
         "practice_sessions": [],
         "status": "learning",
-        "next_practice_date": None,
+        "next_practice_date": (date.today() + timedelta(days=1)).strftime("%d-%m-%y"),
         "current_sheet_index": 0,
         "lecture_dates": [],
         "first_lecture_date": None,
@@ -340,10 +340,18 @@ def apply_overdue_enforcement(chapter):
     if chapter.get("last_overdue_enforced_on") == overdue_marker:
         return False
 
+    # PART 5: Apply overdue punishment/consequences.
+    # Force back to active status and reset maintenance.
     if chapter.get("status") == "maintenance":
         chapter["status"] = "active"
         chapter["maintenance_stage"] = 0
-
+    
+    # Harsh penalty: If overdue > 14 days, reset questions progress to force relearning.
+    if overdue_days > 14:
+        chapter["questions_completed_total"] = 0
+        chapter["used_question_numbers"] = []
+    
+    # Reschedule for tomorrow and record enforcement.
     chapter["next_practice_date"] = (today + timedelta(days=1)).strftime("%d-%m-%y")
     chapter["last_overdue_enforced_on"] = overdue_marker
     return True
@@ -390,15 +398,14 @@ def adjust_next_practice_for_lecture(chapter, lecture_logged):
 def ensure_initial_schedule(chapter):
     """
     PART 3: Guarantee scheduling consistency.
-    If a chapter has no next_practice_date but practice is unlocked,
-    automatically schedule it for tomorrow.
-    This prevents chapters from remaining unscheduled.
+    Every chapter must have a next_practice_date.
+    If missing, schedule for tomorrow immediately.
+    This ensures no chapter remains unscheduled.
     """
     if chapter.get("next_practice_date") is None:
-        if practice_unlocks(chapter):
-            tomorrow = (date.today() + timedelta(days=1)).strftime("%d-%m-%y")
-            chapter["next_practice_date"] = tomorrow
-            return True
+        tomorrow = (date.today() + timedelta(days=1)).strftime("%d-%m-%y")
+        chapter["next_practice_date"] = tomorrow
+        return True
     return False
 
 
@@ -1448,7 +1455,7 @@ def main():
     
     # PART 4: Show visibility warning if overdue enforcement was triggered.
     if enforced:
-        st.warning("⚠️  **Overdue Chapters Alert:** Some chapters were past their practice date. System has auto-rescheduled them. Check the Dashboard for details.")
+        st.warning("⚠️  **Overdue Enforcement Triggered!** Chapters past due date have been rescheduled. If overdue >14 days, progress was reset. Check Dashboard for details.")
     
     # Optional: Add debug toggle for scheduling visibility (PART 6).
     if "debug_schedule" not in st.session_state:
