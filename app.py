@@ -834,21 +834,14 @@ def _render_dashboard(data: Dict[str, Any]) -> None:
     summary_cols[1].markdown(_metric_card("Weak Questions", sum(len(c.get('weak_questions', [])) for c in chapters), "Questions marked for reinforcement"), unsafe_allow_html=True)
     summary_cols[2].markdown(_metric_card("Recent Accuracy", f"{round(sum(_last_accuracy(c) for c in chapters) / len(chapters), 1) if chapters else 0.0}%", "Last logged session average"), unsafe_allow_html=True)
 
-    for title, items in [("Overdue", overdue), ("Due Today", due_today), ("Upcoming", upcoming)]:
-        st.markdown(
-            f"""
-            <div class='section-hero'>
-                <div class='section-hero-title'>{title}</div>
-                <div class='section-hero-sub'>{len(items)} chapter(s) in this queue.</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        if not items:
-            st.markdown(f"<div class='empty-state'>No {title.lower()} chapters right now.</div>", unsafe_allow_html=True)
-            continue
-        for chapter in items:
+    st.markdown("<div style='margin-top: 1.2rem;'></div>", unsafe_allow_html=True)
+    
+    all_chapters = [(c, _chapter_bucket(c)) for c in chapters]
+    if all_chapters:
+        for chapter in chapters:
             _render_chapter_card(chapter)
+    else:
+        st.markdown("<div class='empty-state'>Add a chapter to get started.</div>", unsafe_allow_html=True)
 
 
 def _render_add_chapter_tab(data: Dict[str, Any]) -> None:
