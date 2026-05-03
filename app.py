@@ -24,6 +24,10 @@ def _today_str() -> str:
     return _today().isoformat()
 
 
+def _now_str() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
 def _parse_date(value: str) -> date | None:
     if not value:
         return None
@@ -149,6 +153,8 @@ def load_data() -> Dict[str, Any]:
         payload = response.json()
         content = base64.b64decode(payload["content"]).decode("utf-8")
         st.session_state["github_sha"] = payload.get("sha")
+        st.session_state["last_load_status"] = "Fetched from GitHub"
+        st.session_state["last_load_at"] = _now_str()
         try:
             data = json.loads(content)
         except json.JSONDecodeError:
@@ -156,6 +162,8 @@ def load_data() -> Dict[str, Any]:
     elif response.status_code == 404:
         data = _default_data()
         save_data(data, creating=True)
+        st.session_state["last_load_status"] = "GitHub file missing, created new"
+        st.session_state["last_load_at"] = _now_str()
     else:
         st.error(f"GitHub API error while loading data: {response.status_code}")
         st.stop()
@@ -200,6 +208,8 @@ def save_data(data: Dict[str, Any], creating: bool = False) -> None:
     if response.status_code in (200, 201):
         st.session_state["github_sha"] = response.json().get("content", {}).get("sha")
         st.session_state["data"] = data
+        st.session_state["last_save_status"] = "Saved to GitHub"
+        st.session_state["last_save_at"] = _now_str()
         return
 
     st.error(f"Failed to save data to GitHub: {response.status_code}")
@@ -524,6 +534,21 @@ def main() -> None:
 
     if "data" not in st.session_state:
         st.session_state["data"] = load_data()
+
+    owner, _ = _get_github_config()
+    with st.sidebar:
+        st.markdown("### GitHub Storage")
+        st.caption(f"Repo: {owner}/{REPO_NAME}")
+        st.caption(f"Path: {DATA_PATH} ({BRANCH})")
+        st.caption(f"Load: {st.session_state.get('last_load_status', 'Not loaded yet')}")
+        st.caption(f"Loaded at: {st.session_state.get('last_load_at', '-')}")
+        st.caption(f"Save: {st.session_state.get('last_save_status', 'No save yet')}")
+        st.caption(f"Saved at: {st.session_state.get('last_save_at', '-')}")
+
+        if st.button("Reload from GitHub", use_container_width=True):
+            st.session_state["data"] = load_data()
+            st.success("Reloaded latest data from GitHub.")
+            st.rerun()
 
     data = st.session_state["data"]
 
