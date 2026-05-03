@@ -31,10 +31,12 @@ def _now_str() -> str:
 def _parse_date(value: str) -> date | None:
     if not value:
         return None
-    try:
-        return datetime.strptime(value, "%Y-%m-%d").date()
-    except ValueError:
-        return None
+    for fmt in ("%Y-%m-%d", "%d-%m-%y"):
+        try:
+            return datetime.strptime(value, fmt).date()
+        except ValueError:
+            continue
+    return None
 
 
 def _normalize_question_list(values: List[Any], total_questions: int) -> List[int]:
@@ -94,7 +96,12 @@ def _default_chapter(name: str, total_questions: int, question_set_size: int) ->
 
 def _ensure_chapter_schema(chapter: Dict[str, Any]) -> None:
     name = str(chapter.get("chapter_name", "")).strip()
+
+    # Backward compatibility: older data uses `sheet_total` instead of `total_questions`.
+    legacy_sheet_total = int(chapter.get("sheet_total", 0) or 0)
     total_questions = int(chapter.get("total_questions", 0) or 0)
+    if total_questions <= 1 and legacy_sheet_total > 1:
+        total_questions = legacy_sheet_total
     total_questions = max(total_questions, 1)
     size = int(chapter.get("question_set_size", 10) or 10)
 
@@ -158,7 +165,8 @@ def load_data() -> Dict[str, Any]:
         try:
             data = json.loads(content)
         except json.JSONDecodeError:
-            data = _default_data()
+            st.error("GitHub maths_data.json is not valid JSON. Please fix JSON format in the repo file.")
+            st.stop()
     elif response.status_code == 404:
         data = _default_data()
         save_data(data, creating=True)
@@ -174,7 +182,6 @@ def load_data() -> Dict[str, Any]:
     for chapter in data["chapters"]:
         _ensure_chapter_schema(chapter)
 
-    save_data(data)
     return data
 
 
