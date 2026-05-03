@@ -677,32 +677,44 @@ def _inject_responsive_styles(layout_mode: str) -> None:
         }}
 
         .chapter-card h4 {{
-            margin: 0 0 0.35rem 0;
-            font-size: 1.35rem;
+            margin: 0 0 0.5rem 0;
+            font-size: 1.45rem;
+            color: var(--text);
         }}
 
         .chapter-meta {{
             color: var(--muted);
-            font-size: 0.92rem;
+            font-size: 0.88rem;
+            line-height: 1.5;
+            margin-bottom: 1rem;
         }}
 
         .chapter-badges {{
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.45rem;
-            margin-top: 0.65rem;
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 0.7rem;
         }}
 
         .badge {{
-            display: inline-flex;
-            align-items: center;
-            gap: 0.35rem;
-            padding: 0.32rem 0.62rem;
-            border-radius: 999px;
-            background: var(--accent-soft);
+            display: flex;
+            flex-direction: column;
+            background: linear-gradient(135deg, rgba(17, 94, 89, 0.08), rgba(17, 94, 89, 0.04));
+            border: 1px solid rgba(17, 94, 89, 0.15);
+            padding: 0.55rem 0.78rem;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
             color: var(--accent);
-            font-size: 0.8rem;
-            font-weight: 600;
+        }}
+
+        .badge::before {{
+            content: attr(data-label);
+            display: block;
+            color: var(--muted);
+            font-size: 0.7rem;
+            margin-bottom: 0.2rem;
         }}
 
         .empty-state {{
@@ -791,17 +803,19 @@ def _render_chapter_card(chapter: Dict[str, Any]) -> None:
     card_html = f"""
     <div class='chapter-card'>
         <h4>{chapter['chapter_name']}</h4>
-        <div class='chapter-meta'>Next review: {next_review} · Interval: {interval_days} days · Status: {state_label}</div>
+        <div class='chapter-meta'>
+            <strong>Next:</strong> {next_review} &nbsp;|&nbsp; <strong>Interval:</strong> {interval_days}d &nbsp;|&nbsp; <strong>Status:</strong> {state_label}
+        </div>
         <div class='chapter-badges'>
-            <span class='badge'>Accuracy: {accuracy}%</span>
-            <span class='badge'>Retention: {retention}%</span>
-            <span class='badge'>Weak: {weak_count}</span>
-            <span class='badge'>Set: {current_set}</span>
+            <div class='badge'><span style='color: var(--muted); font-size: 0.66rem;'>Accuracy</span><span style='font-size: 1.1rem; margin-top: 0.1rem;'>{accuracy}%</span></div>
+            <div class='badge'><span style='color: var(--muted); font-size: 0.66rem;'>Retention</span><span style='font-size: 1.1rem; margin-top: 0.1rem;'>{retention}%</span></div>
+            <div class='badge'><span style='color: var(--muted); font-size: 0.66rem;'>Weak</span><span style='font-size: 1.1rem; margin-top: 0.1rem;'>{weak_count}</span></div>
+            <div class='badge'><span style='color: var(--muted); font-size: 0.66rem;'>Ready</span><span style='font-size: 1.1rem; margin-top: 0.1rem;'>{current_set}</span></div>
         </div>
     </div>
     """
     st.markdown(card_html, unsafe_allow_html=True)
-    st.progress(min(max(retention / 100.0, 0.0), 1.0))
+    st.progress(value=min(max(retention / 100.0, 0.0), 1.0), text=f"{retention:.0f}%")
 
 
 def _render_dashboard(data: Dict[str, Any]) -> None:
