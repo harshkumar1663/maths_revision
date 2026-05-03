@@ -622,16 +622,22 @@ def main() -> None:
             chapter_name = st.selectbox("Select chapter", chapter_names, key="gen_chapter")
             chapter = _find_chapter(data, chapter_name)
             if chapter:
-                new_size = st.slider(
+                total_questions = max(1, int(chapter.get("total_questions", 1) or 1))
+                saved_size = int(chapter.get("question_set_size", 10) or 10)
+                safe_default_size = max(1, min(saved_size, total_questions))
+
+                new_size = st.number_input(
                     "Question set size",
                     min_value=1,
-                    max_value=chapter["total_questions"],
-                    value=int(chapter["question_set_size"]),
+                    step=1,
+                    value=safe_default_size,
+                    key=f"qset_size_{chapter_name}",
+                    help="Set size is automatically capped at total questions.",
                 )
                 mode = st.radio("Practice mode", PRACTICE_MODES, horizontal=True)
 
                 if st.button("Generate Question Set"):
-                    chapter["question_set_size"] = int(new_size)
+                    chapter["question_set_size"] = max(1, min(int(new_size), total_questions))
                     generated = generate_question_set(chapter)
                     chapter["last_generated_mode"] = mode
                     save_data(data)
