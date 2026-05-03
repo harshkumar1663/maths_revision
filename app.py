@@ -551,7 +551,11 @@ def render_practice_ui(data):
     st.markdown(f"**Next Review:** {format_date(parse_date(chapter.get('next_review_date')))}")
 
     st.markdown("#### Generate Question Set")
-    qs_size = st.number_input("Question set size", min_value=1, max_value=max(1, chapter.get('total_questions', 1)), value=int(chapter.get('question_set_size', 15) or 15), key=f"qsize_{chapter_name}")
+    max_q = max(1, int(chapter.get('total_questions', 1) or 1))
+    default_q = int(chapter.get('question_set_size', 15) or 15)
+    # Ensure default does not exceed the widget's max_value (prevents StreamlitValueAboveMaxError)
+    default_q = min(default_q, max_q)
+    qs_size = st.number_input("Question set size", min_value=1, max_value=max_q, value=default_q, key=f"qsize_{chapter_name}")
     chapter["question_set_size"] = int(qs_size)
     if st.button("Generate Practice Set", key=f"gen_{chapter_name}"):
         ok, msg = generate_question_set(chapter)
