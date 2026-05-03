@@ -517,34 +517,168 @@ def _inject_responsive_styles(layout_mode: str) -> None:
     st.markdown(
         f"""
         <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Cormorant+Garamond:wght@500;600;700&display=swap');
+
         :root {{
-            --bg: #f7f7f4;
-            --panel: #ffffff;
-            --text: #1f2937;
-            --muted: #6b7280;
-            --accent: #0f766e;
-            --accent-soft: rgba(15, 118, 110, 0.12);
-            --border: rgba(31, 41, 55, 0.08);
+            --bg-1: #f4efe8;
+            --bg-2: #eef5f1;
+            --panel: rgba(255, 255, 255, 0.82);
+            --panel-strong: #ffffff;
+            --text: #14202b;
+            --muted: #5f6b76;
+            --accent: #115e59;
+            --accent-2: #b45309;
+            --accent-soft: rgba(17, 94, 89, 0.12);
+            --border: rgba(20, 32, 43, 0.08);
+            --shadow: 0 18px 48px rgba(15, 23, 42, 0.08);
+        }}
+
+        html, body, [class*="stApp"] {{
+            font-family: 'Inter', sans-serif;
+            color: var(--text);
         }}
 
         .stApp {{
-            background: linear-gradient(180deg, #fbfbf8 0%, #f4f7f5 100%);
+            background:
+                radial-gradient(circle at 0% 0%, rgba(181, 83, 9, 0.11), transparent 34%),
+                radial-gradient(circle at 100% 0%, rgba(17, 94, 89, 0.12), transparent 30%),
+                linear-gradient(180deg, var(--bg-1) 0%, var(--bg-2) 100%);
             color: var(--text);
         }}
 
         [data-testid="stSidebar"] {{
-            background: #fcfcfb;
+            background: rgba(255, 255, 255, 0.74);
             border-right: 1px solid var(--border);
+            backdrop-filter: blur(16px);
+        }}
+
+        h1, h2, h3, h4 {{
+            font-family: 'Cormorant Garamond', serif;
+            letter-spacing: 0.2px;
+        }}
+
+        h1 {{
+            font-size: clamp(2.3rem, 5vw, 3.6rem) !important;
+            line-height: 0.98;
+            margin-bottom: 0.2rem;
+        }}
+
+        .app-shell {{
+            max-width: 1240px;
+            margin: 0 auto;
+        }}
+
+        .app-hero {{
+            background: linear-gradient(135deg, rgba(17, 94, 89, 0.14), rgba(180, 83, 9, 0.10));
+            border: 1px solid rgba(17, 94, 89, 0.12);
+            border-radius: 24px;
+            padding: 1.1rem 1.25rem;
+            margin: 0.2rem 0 1rem 0;
+            box-shadow: var(--shadow);
+        }}
+
+        .app-hero-title {{
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            letter-spacing: 0.22em;
+            color: var(--accent);
+            font-weight: 800;
+            margin-bottom: 0.3rem;
+        }}
+
+        .app-hero-subtitle {{
+            font-size: 1rem;
+            color: var(--muted);
+            max-width: 72ch;
+            margin-top: 0.25rem;
+        }}
+
+        .app-panel {{
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(12px);
+        }}
+
+        .metric-grid {{
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 0.9rem;
+            margin-bottom: 1rem;
+        }}
+
+        .metric-card {{
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0.80));
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 1rem 1.05rem;
+            box-shadow: var(--shadow);
+            min-height: 108px;
+        }}
+
+        .metric-label {{
+            color: var(--muted);
+            font-size: 0.76rem;
+            text-transform: uppercase;
+            letter-spacing: 0.18em;
+            font-weight: 800;
+        }}
+
+        .metric-value {{
+            font-size: 2.2rem;
+            line-height: 1;
+            margin-top: 0.35rem;
+            font-weight: 800;
+            color: var(--text);
+        }}
+
+        .metric-note {{
+            margin-top: 0.35rem;
+            color: var(--muted);
+            font-size: 0.92rem;
+        }}
+
+        .section-shell {{
+            margin-top: 0.8rem;
+            margin-bottom: 1rem;
+        }}
+
+        .section-hero {{
+            background: linear-gradient(135deg, rgba(17, 94, 89, 0.10), rgba(180, 83, 9, 0.08));
+            border: 1px solid rgba(17, 94, 89, 0.12);
+            border-radius: 18px;
+            padding: 0.85rem 1rem;
+            margin-bottom: 0.8rem;
+        }}
+
+        .section-hero-title {{
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.22em;
+            color: var(--accent);
+            font-weight: 800;
+        }}
+
+        .section-hero-sub {{
+            color: var(--muted);
+            margin-top: 0.2rem;
+            font-size: 0.95rem;
         }}
 
         .chapter-card {{
-            background: var(--panel);
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.84));
             border: 1px solid var(--border);
             border-left: 4px solid var(--accent);
-            border-radius: 16px;
+            border-radius: 18px;
             padding: {card_pad};
-            box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+            box-shadow: var(--shadow);
             margin-bottom: {gap};
+        }}
+
+        .chapter-card h4 {{
+            margin: 0 0 0.35rem 0;
+            font-size: 1.35rem;
         }}
 
         .chapter-meta {{
@@ -563,7 +697,7 @@ def _inject_responsive_styles(layout_mode: str) -> None:
             display: inline-flex;
             align-items: center;
             gap: 0.35rem;
-            padding: 0.25rem 0.55rem;
+            padding: 0.32rem 0.62rem;
             border-radius: 999px;
             background: var(--accent-soft);
             color: var(--accent);
@@ -571,10 +705,63 @@ def _inject_responsive_styles(layout_mode: str) -> None:
             font-weight: 600;
         }}
 
+        .empty-state {{
+            background: rgba(255, 255, 255, 0.7);
+            border: 1px dashed rgba(17, 94, 89, 0.22);
+            color: var(--muted);
+            border-radius: 18px;
+            padding: 1rem;
+        }}
+
+        div[data-testid="stTabs"] {{
+            background: rgba(255, 255, 255, 0.6);
+            border: 1px solid var(--border);
+            border-radius: 18px;
+            padding: 0.35rem 0.55rem 0.1rem 0.55rem;
+            backdrop-filter: blur(14px);
+        }}
+
+        div[data-baseweb="tab-list"] {{
+            gap: 0.25rem;
+        }}
+
+        button[kind="tab"] {{
+            border-radius: 999px;
+            font-weight: 700;
+            color: var(--muted);
+        }}
+
+        button[kind="tab"][aria-selected="true"] {{
+            color: var(--accent);
+        }}
+
+        button[kind="primary"] {{
+            background: linear-gradient(135deg, var(--accent), #0f7c73);
+            border: 0;
+            color: white;
+            border-radius: 12px;
+            font-weight: 700;
+            box-shadow: 0 12px 24px rgba(17, 94, 89, 0.24);
+        }}
+
         @media (max-width: 700px) {{
+            h1 {{
+                font-size: 2rem !important;
+            }}
+
+            .metric-grid {{
+                grid-template-columns: 1fr 1fr;
+            }}
+
             .chapter-card {{
                 border-radius: 14px;
                 padding: 0.85rem;
+            }}
+        }}
+
+        @media (max-width: 520px) {{
+            .metric-grid {{
+                grid-template-columns: 1fr;
             }}
         }}
         </style>
@@ -583,56 +770,85 @@ def _inject_responsive_styles(layout_mode: str) -> None:
     )
 
 
+def _metric_card(label: str, value: Any, note: str) -> str:
+    return (
+        "<div class='metric-card'>"
+        f"<div class='metric-label'>{label}</div>"
+        f"<div class='metric-value'>{value}</div>"
+        f"<div class='metric-note'>{note}</div>"
+        "</div>"
+    )
+
+
+def _render_chapter_card(chapter: Dict[str, Any]) -> None:
+    next_review = chapter.get('next_review_date', '-') or '-'
+    interval_days = round(float(chapter.get('interval_days', 1.0)), 2)
+    accuracy = _last_accuracy(chapter)
+    retention = _retention_score(chapter)
+    weak_count = len(chapter.get('weak_questions', []))
+    current_set = len(chapter.get('current_question_set', []))
+    state_label = _chapter_bucket(chapter).replace('_', ' ').title()
+    card_html = f"""
+    <div class='chapter-card'>
+        <h4>{chapter['chapter_name']}</h4>
+        <div class='chapter-meta'>Next review: {next_review} · Interval: {interval_days} days · Status: {state_label}</div>
+        <div class='chapter-badges'>
+            <span class='badge'>Accuracy: {accuracy}%</span>
+            <span class='badge'>Retention: {retention}%</span>
+            <span class='badge'>Weak: {weak_count}</span>
+            <span class='badge'>Set: {current_set}</span>
+        </div>
+    </div>
+    """
+    st.markdown(card_html, unsafe_allow_html=True)
+    st.progress(min(max(retention / 100.0, 0.0), 1.0))
+
+
 def _render_dashboard(data: Dict[str, Any]) -> None:
     chapters = data.get("chapters", [])
     due_today = [c for c in chapters if _chapter_bucket(c) == "due_today"]
     overdue = [c for c in chapters if _chapter_bucket(c) == "overdue"]
     upcoming = [c for c in chapters if _chapter_bucket(c) == "upcoming"]
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Due Today", len(due_today))
-    c2.metric("Overdue", len(overdue))
-    c3.metric("Upcoming", len(upcoming))
+    total_questions = sum(int(c.get("total_questions", 0) or 0) for c in chapters)
+    avg_retention = round(sum(_retention_score(c) for c in chapters) / len(chapters), 1) if chapters else 0.0
+
+    st.markdown(
+        """
+        <div class='app-hero'>
+            <div class='app-hero-title'>Memory-first revision cockpit</div>
+            <div class='app-hero-subtitle'>Track overdue chapters, reinforce weak questions, and keep recall sessions moving without the lecture-style clutter.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    metric_cols = st.columns(4)
+    metric_cols[0].markdown(_metric_card("Total Chapters", len(chapters), "Active chapters in rotation"), unsafe_allow_html=True)
+    metric_cols[1].markdown(_metric_card("Due Today", len(due_today), "Ready for recall practice"), unsafe_allow_html=True)
+    metric_cols[2].markdown(_metric_card("Overdue", len(overdue), "Need immediate attention"), unsafe_allow_html=True)
+    metric_cols[3].markdown(_metric_card("Avg Retention", f"{avg_retention}%", f"Across {total_questions} total questions"), unsafe_allow_html=True)
+
+    summary_cols = st.columns(3)
+    summary_cols[0].markdown(_metric_card("Upcoming", len(upcoming), "Waiting for the next interval"), unsafe_allow_html=True)
+    summary_cols[1].markdown(_metric_card("Weak Questions", sum(len(c.get('weak_questions', [])) for c in chapters), "Questions marked for reinforcement"), unsafe_allow_html=True)
+    summary_cols[2].markdown(_metric_card("Recent Accuracy", f"{round(sum(_last_accuracy(c) for c in chapters) / len(chapters), 1) if chapters else 0.0}%", "Last logged session average"), unsafe_allow_html=True)
 
     for title, items in [("Overdue", overdue), ("Due Today", due_today), ("Upcoming", upcoming)]:
-        st.subheader(title)
+        st.markdown(
+            f"""
+            <div class='section-hero'>
+                <div class='section-hero-title'>{title}</div>
+                <div class='section-hero-sub'>{len(items)} chapter(s) in this queue.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         if not items:
-            st.info(f"No {title.lower()} chapters.")
+            st.markdown(f"<div class='empty-state'>No {title.lower()} chapters right now.</div>", unsafe_allow_html=True)
             continue
         for chapter in items:
-            st.markdown(
-                f"""
-                <div class="chapter-card">
-                    <h4>{chapter['chapter_name']}</h4>
-                    <div class="chapter-meta">Next review: {chapter.get('next_review_date', '-')} · Interval: {round(float(chapter.get('interval_days', 1.0)), 2)} days</div>
-                    <div class="chapter-badges">
-                        <span class="badge">Accuracy: {_last_accuracy(chapter)}%</span>
-                        <span class="badge">Retention: {_retention_score(chapter)}%</span>
-                        <span class="badge">Weak: {len(chapter.get('weak_questions', []))}</span>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            st.progress(min(max(_retention_score(chapter) / 100.0, 0.0), 1.0))
-
-
-def _display_sidebar_sync_status() -> None:
-    owner, token = _get_github_config()
-    st.sidebar.markdown("### GitHub Storage")
-    st.sidebar.caption(f"Repo: {owner}/{REPO_NAME}")
-    st.sidebar.caption(f"Path: {DATA_PATH} ({BRANCH})")
-    st.sidebar.caption(f"Load: {st.session_state.get('last_load_status', 'Not loaded yet')}")
-    st.sidebar.caption(f"Loaded at: {st.session_state.get('last_load_at', '-')}")
-    st.sidebar.caption(f"Save: {st.session_state.get('last_save_status', 'No save yet')}")
-    st.sidebar.caption(f"Saved at: {st.session_state.get('last_save_at', '-')}")
-
-    if not token:
-        st.sidebar.info("GITHUB_TOKEN is not configured. The app is using local file fallback.")
-
-    if st.sidebar.button("Reload from GitHub", use_container_width=True):
-        st.session_state["data"] = load_data()
-        st.rerun()
+            _render_chapter_card(chapter)
 
 
 def _render_add_chapter_tab(data: Dict[str, Any]) -> None:
@@ -840,12 +1056,23 @@ def _display_sidebar_sync_status() -> None:
 
 def main() -> None:
     st.set_page_config(page_title="SSC Maths SRS", page_icon="🧠", layout="wide")
-    st.title("SSC Maths Spaced Repetition Practice App")
-    st.caption("Memory-first engine: spaced repetition, active recall, and mistake reinforcement.")
+    st.markdown(
+        """
+        <div class='app-shell'>
+            <div class='app-hero'>
+                <div class='app-hero-title'>SSC Maths spaced repetition</div>
+                <h1>Revision that feels built for momentum.</h1>
+                <div class='app-hero-subtitle'>A memory-first practice workspace with overdue tracking, weak-question reinforcement, and GitHub-backed persistence.</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     if "data" not in st.session_state:
         st.session_state["data"] = load_data()
 
+    st.sidebar.markdown("### View")
     layout_mode = st.sidebar.selectbox("Layout mode", ["Auto", "Compact", "Spacious"], index=0)
     _inject_responsive_styles(layout_mode)
     _display_sidebar_sync_status()
