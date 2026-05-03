@@ -642,13 +642,7 @@ def main() -> None:
     ])
 
     # 1) Dashboard
-            f"""**{chapter['chapter_name']}**
-            - Next review: {chapter.get('next_review_date', '-')}
-            - Interval (days): {round(float(chapter.get('interval_days', 1.0)), 2)}
-            - Last accuracy: {_last_accuracy(chapter)}%
-            - Retention score (last 5 recalls): {_retention_score(chapter)}%
-            """
-        chapters = data.get("chapters", [])
+    chapters = data.get("chapters", [])
         due_today = [c for c in chapters if _chapter_bucket(c) == "due_today"]
     def _inject_responsive_styles(layout_mode: str = "Auto") -> None:
         # Light theme base with responsive compact/spacious adjustments.
