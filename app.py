@@ -595,6 +595,135 @@ def _chapter_card(chapter: Dict[str, Any]) -> None:
 """
     )
 
+def _inject_responsive_styles(layout_mode: str = "Auto") -> None:
+    # Light theme base with responsive compact/spacious adjustments.
+    compact_css = """
+    .card { padding: 8px; border-radius: 8px; background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.06); margin-bottom: 12px; }
+    .card h4 { margin: 0 0 6px 0; }
+    .card .meta { color: #6b7280; font-size: 0.9rem; }
+    .card .metrics { margin-top: 6px; }
+    .card .actions { margin-top: 8px; }
+    @media (max-width: 680px) {
+      .card { padding: 6px; font-size: 0.95rem; }
+    }
+    """
+
+    spacious_css = """
+    .card { padding: 16px; border-radius: 10px; background: #ffffff; box-shadow: 0 2px 6px rgba(0,0,0,0.06); margin-bottom: 16px; }
+    .card h4 { margin: 0 0 8px 0; font-size: 1.05rem; }
+    .card .meta { color: #6b7280; font-size: 0.95rem; }
+    .card .metrics { margin-top: 8px; }
+    .card .actions { margin-top: 10px; }
+    @media (max-width: 680px) {
+      .card { padding: 8px; font-size: 0.95rem; }
+    }
+    """
+
+    if layout_mode == "Compact":
+        css = compact_css
+    elif layout_mode == "Spacious":
+        css = spacious_css
+    else:
+        # Auto: use spacious on wide screens, compact on small via media query
+        css = spacious_css + "\n@media (max-width: 680px) { .card { padding: 8px; } }"
+
+    st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
+
+    # subtle accent for cards
+    accent = "#0ea5a4"  # teal-500
+    extra = f"""
+    .card {{ border-left: 4px solid {accent}; padding-left: 12px; }}
+    """
+    st.markdown(f"<style>{extra}</style>", unsafe_allow_html=True)
+
+
+def _render_dashboard(data: Dict[str, Any], layout_mode: str) -> None:
+    chapters = data.get("chapters", [])
+    due_today = [c for c in chapters if _chapter_bucket(c) == "due_today"]
+    overdue = [c for c in chapters if _chapter_bucket(c) == "overdue"]
+    upcoming = [c for c in chapters if _chapter_bucket(c) == "upcoming"]
+
+    # Top-level metrics
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Due Today", len(due_today))
+    c2.metric("Overdue", len(overdue))
+    c3.metric("Upcoming", len(upcoming))
+
+    st.markdown("---")
+
+    # Cards grid: create 3 columns which will naturally stack on small screens
+    cols = st.columns(3)
+
+    def render_card(chapter: Dict[str, Any], col) -> None:
+        with col:
+            st.markdown(f"<div class='card'><h4>{chapter['chapter_name']}</h4>", unsafe_allow_html=True)
+            st.markdown(f"<div class='meta'>Next review: {chapter.get('next_review_date', '-')} &nbsp;•&nbsp; Interval: {round(float(chapter.get('interval_days',1.0)),2)}d</div></div>", unsafe_allow_html=True)
+            # retention progress
+            retention = _retention_score(chapter)
+            st.progress(min(max(retention / 100.0, 0.0), 1.0))
+            st.write(f"Last accuracy: {_last_accuracy(chapter)}% — Retention (last 5): {retention}%")
+            # quick actions
+            a1, a2 = st.columns([1, 1])
+            with a1:
+                if st.button("Generate", key=f"gen_{chapter['chapter_name']}"):
+                    chapter['question_set_size'] = int(chapter.get('question_set_size', 10))
+                    generated = generate_question_set(chapter)
+                    save_data(data)
+                    st.success(f"Generated {len(generated)} questions")
+            with a2:
+                if st.button("Practice", key=f"prac_{chapter['chapter_name']}"):
+                    st.session_state['last_practice_chapter'] = chapter['chapter_name']
+                    st.info("Selected for practice — switch to 'Generate Practice' tab to proceed")
+
+    # show overdue first, then due today, then upcoming
+    ordered = overdue + due_today + upcoming
+    if not ordered:
+        st.info("No chapters found. Add a chapter to get started.")
+        return
+
+    for i, chapter in enumerate(ordered):
+        col = cols[i % 3]
+        render_card(chapter, col)
+
+
+def _github_headers(token: str) -> Dict[str, str]:
+    return {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+
+
+def _github_get_contents(repo: str, path: str, branch: str = "main", token: Optional[str] = None) -> Dict[str, Any]:
+    try:
+        import requests
+    except Exception as e:
+        raise RuntimeError("The 'requests' package is required for GitHub Sync.") from e
+    url = f"https://api.github.com/repos/{repo}/contents/{path}?ref={branch}"
+    headers = _github_headers(token) if token else {"Accept": "application/vnd.github.v3+json"}
+    resp = requests.get(url, headers=headers, timeout=15)
+    if resp.status_code == 200:
+        return resp.json()
+    raise RuntimeError(f"GitHub GET failed: {resp.status_code} {resp.text}")
+
+
+def _github_put_contents(
+    repo: str, path: str, content_text: str, message: str, sha: Optional[str], branch: str = "main", token: Optional[str] = None
+) -> Dict[str, Any]:
+    try:
+        import requests
+    except Exception as e:
+        raise RuntimeError("The 'requests' package is required for GitHub Sync.") from e
+    url = f"https://api.github.com/repos/{repo}/contents/{path}"
+    payload = {
+        "message": message,
+        "content": base64.b64encode(content_text.encode("utf-8")).decode("utf-8"),
+        "branch": branch,
+    }
+    if sha:
+        payload["sha"] = sha
+    headers = _github_headers(token) if token else {"Accept": "application/vnd.github.v3+json"}
+    resp = requests.put(url, json=payload, headers=headers, timeout=15)
+    if resp.status_code in (200, 201):
+        return resp.json()
+    raise RuntimeError(f"GitHub PUT failed: {resp.status_code} {resp.text}")
+
 
 # -----------------------------
 # Streamlit App
@@ -603,20 +732,13 @@ def main() -> None:
     st.set_page_config(page_title="SSC Maths SRS", page_icon="🧠", layout="wide")
     st.title("SSC Maths Spaced Repetition Practice App")
     st.caption("Memory-first engine: spaced repetition, active recall, and mistake reinforcement.")
-    # Display controls (sidebar)
+
+    # Sidebar: layout and GitHub sync
     st.sidebar.header("Display")
-    layout_mode = st.sidebar.selectbox(
-        "Layout mode",
-        ["Auto", "Compact", "Spacious"],
-        index=0,
-        help="Auto switches between compact and spacious depending on screen width",
-    )
+    layout_mode = st.sidebar.selectbox("Layout mode", ["Auto", "Compact", "Spacious"], index=0)
     _inject_responsive_styles(layout_mode)
 
-    if "data" not in st.session_state:
-        st.session_state["data"] = load_data()
-
-    owner, _ = _get_github_config()
+    owner, token = _get_github_config()
     with st.sidebar:
         st.markdown("### GitHub Storage")
         st.caption(f"Repo: {owner}/{REPO_NAME}")
@@ -625,309 +747,109 @@ def main() -> None:
         st.caption(f"Loaded at: {st.session_state.get('last_load_at', '-')}")
         st.caption(f"Save: {st.session_state.get('last_save_status', 'No save yet')}")
         st.caption(f"Saved at: {st.session_state.get('last_save_at', '-')}")
-
         if st.button("Reload from GitHub", use_container_width=True):
             st.session_state["data"] = load_data()
             st.success("Reloaded latest data from GitHub.")
-            st.rerun()
+            st.experimental_rerun()
 
+    if "data" not in st.session_state:
+        st.session_state["data"] = load_data()
     data = st.session_state["data"]
 
-    tabs = st.tabs([
-        "Dashboard",
-        "Add Chapter",
-        "Generate Practice",
-        "Log Practice",
-        "Chapter Manager",
-    ])
+    tabs = st.tabs(["Dashboard", "Add Chapter", "Practice", "Chapter Manager"])
 
-    # 1) Dashboard
-    chapters = data.get("chapters", [])
-        due_today = [c for c in chapters if _chapter_bucket(c) == "due_today"]
-    def _inject_responsive_styles(layout_mode: str = "Auto") -> None:
-        # Light theme base with responsive compact/spacious adjustments.
-        compact_css = """
-        .card { padding: 8px; border-radius: 8px; background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.06); margin-bottom: 12px; }
-        .card h4 { margin: 0 0 6px 0; }
-        .card .meta { color: #6b7280; font-size: 0.9rem; }
-        .card .metrics { margin-top: 6px; }
-        .card .actions { margin-top: 8px; }
-        @media (max-width: 680px) {
-          .card { padding: 6px; font-size: 0.95rem; }
-        }
-        """
+    # Dashboard
+    with tabs[0]:
+        _render_dashboard(data, layout_mode)
 
-        spacious_css = """
-        .card { padding: 16px; border-radius: 10px; background: #ffffff; box-shadow: 0 2px 6px rgba(0,0,0,0.06); margin-bottom: 16px; }
-        .card h4 { margin: 0 0 8px 0; font-size: 1.05rem; }
-        .card .meta { color: #6b7280; font-size: 0.95rem; }
-        .card .metrics { margin-top: 8px; }
-        .card .actions { margin-top: 10px; }
-        @media (max-width: 680px) {
-          .card { padding: 8px; font-size: 0.95rem; }
-        }
-        """
-
-        if layout_mode == "Compact":
-            css = compact_css
-        elif layout_mode == "Spacious":
-            css = spacious_css
-        else:
-            # Auto: use spacious on wide screens, compact on small via media query
-            css = spacious_css + "\n@media (max-width: 680px) { .card { padding: 8px; } }"
-
-        st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
-
-        # subtle accent for cards
-        accent = "#0ea5a4"  # teal-500
-        extra = f"""
-        .card {{ border-left: 4px solid {accent}; padding-left: 12px; }}
-        """
-        st.markdown(f"<style>{extra}</style>", unsafe_allow_html=True)
-
-
-    def _render_dashboard(data: Dict[str, Any], layout_mode: str) -> None:
-        chapters = data.get("chapters", [])
-        due_today = [c for c in chapters if _chapter_bucket(c) == "due_today"]
-        overdue = [c for c in chapters if _chapter_bucket(c) == "overdue"]
-        upcoming = [c for c in chapters if _chapter_bucket(c) == "upcoming"]
-
-        # Top-level metrics
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Due Today", len(due_today))
-        c2.metric("Overdue", len(overdue))
-        c3.metric("Upcoming", len(upcoming))
-
-        st.markdown("---")
-
-        # Cards grid: create 3 columns which will naturally stack on small screens
-        cols = st.columns(3)
-
-        def render_card(chapter: Dict[str, Any], col) -> None:
-            with col:
-                st.markdown(f"<div class='card'><h4>{chapter['chapter_name']}</h4>", unsafe_allow_html=True)
-                st.markdown(f"<div class='meta'>Next review: {chapter.get('next_review_date', '-')} &nbsp;•&nbsp; Interval: {round(float(chapter.get('interval_days',1.0)),2)}d</div></div>", unsafe_allow_html=True)
-                # retention progress
-                retention = _retention_score(chapter)
-                st.progress(min(max(retention / 100.0, 0.0), 1.0))
-                st.write(f"Last accuracy: {_last_accuracy(chapter)}% — Retention (last 5): {retention}%")
-                # quick actions
-                a1, a2 = st.columns([1, 1])
-                with a1:
-                    if st.button("Generate", key=f"gen_{chapter['chapter_name']}"):
-                        chapter['question_set_size'] = int(chapter.get('question_set_size', 10))
-                        generated = generate_question_set(chapter)
-                        save_data(data)
-                        st.success(f"Generated {len(generated)} questions")
-                with a2:
-                    if st.button("Practice", key=f"prac_{chapter['chapter_name']}"):
-                        st.session_state['last_practice_chapter'] = chapter['chapter_name']
-                        st.info("Selected for practice — switch to 'Generate Practice' tab to proceed")
-
-        # show overdue first, then due today, then upcoming
-        ordered = overdue + due_today + upcoming
-        if not ordered:
-            st.info("No chapters found. Add a chapter to get started.")
-            return
-
-        for i, chapter in enumerate(ordered):
-            col = cols[i % 3]
-            render_card(chapter, col)
-
-
-    def _github_headers(token: str) -> Dict[str, str]:
-        return {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
-
-
-    def _github_get_contents(repo: str, path: str, branch: str = "main", token: Optional[str] = None) -> Dict[str, Any]:
-        try:
-            import requests
-        except Exception as e:
-            raise RuntimeError("The 'requests' package is required for GitHub Sync.") from e
-        url = f"https://api.github.com/repos/{repo}/contents/{path}?ref={branch}"
-        headers = _github_headers(token) if token else {"Accept": "application/vnd.github.v3+json"}
-        resp = requests.get(url, headers=headers, timeout=15)
-        if resp.status_code == 200:
-            return resp.json()
-        raise RuntimeError(f"GitHub GET failed: {resp.status_code} {resp.text}")
-
-
-    def _github_put_contents(
-        repo: str, path: str, content_text: str, message: str, sha: Optional[str], branch: str = "main", token: Optional[str] = None
-    ) -> Dict[str, Any]:
-        try:
-            import requests
-        except Exception as e:
-            raise RuntimeError("The 'requests' package is required for GitHub Sync.") from e
-        url = f"https://api.github.com/repos/{repo}/contents/{path}"
-        payload = {
-            "message": message,
-            "content": base64.b64encode(content_text.encode("utf-8")).decode("utf-8"),
-            "branch": branch,
-        }
-        if sha:
-            payload["sha"] = sha
-        headers = _github_headers(token) if token else {"Accept": "application/vnd.github.v3+json"}
-        resp = requests.put(url, json=payload, headers=headers, timeout=15)
-        if resp.status_code in (200, 201):
-            return resp.json()
-        raise RuntimeError(f"GitHub PUT failed: {resp.status_code} {resp.text}")
-        overdue = [c for c in chapters if _chapter_bucket(c) == "overdue"]
-        upcoming = [c for c in chapters if _chapter_bucket(c) == "upcoming"]
-
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Due Today", len(due_today))
-        c2.metric("Overdue", len(overdue))
-        c3.metric("Upcoming", len(upcoming))
-
-        st.subheader("Due Today")
-        if due_today:
-            for chapter in due_today:
-                _chapter_card(chapter)
-                st.divider()
-        else:
-            st.info("No chapters due today.")
-
-        st.subheader("Overdue")
-        if overdue:
-            for chapter in overdue:
-                _chapter_card(chapter)
-                st.divider()
-        else:
-            st.info("No overdue chapters.")
-
-        st.subheader("Upcoming")
-        if upcoming:
-            for chapter in upcoming:
-                _chapter_card(chapter)
-                st.divider()
-        else:
-            st.info("No upcoming chapters.")
-
-    # 2) Add Chapter
+    # Add Chapter
     with tabs[1]:
         with st.form("add_chapter_form"):
             name = st.text_input("Chapter name")
             total_questions = st.number_input("Total questions", min_value=1, step=1, value=50)
             question_set_size = st.number_input("Question set size", min_value=1, step=1, value=10)
             submit = st.form_submit_button("Create Chapter")
-
         if submit:
             ok, msg = create_chapter(data, name, int(total_questions), int(question_set_size))
             if ok:
                 st.success(msg)
-                st.rerun()
+                st.experimental_rerun()
             else:
                 st.error(msg)
 
     chapter_names = [c["chapter_name"] for c in data.get("chapters", [])]
 
-    # 3) Generate Practice
+    # Practice (generate + log)
     with tabs[2]:
         if not chapter_names:
             st.info("Add a chapter first.")
         else:
-            chapter_name = st.selectbox("Select chapter", chapter_names, key="gen_chapter")
+            chapter_name = st.selectbox("Select chapter", chapter_names, key="practice_chapter")
             chapter = _find_chapter(data, chapter_name)
             if chapter:
-                total_questions = max(1, int(chapter.get("total_questions", 1) or 1))
-                saved_size = int(chapter.get("question_set_size", 10) or 10)
-                safe_default_size = max(1, min(saved_size, total_questions))
+                key_suffix = chapter_name.replace(" ", "_")
+                mode = st.radio("Practice mode", PRACTICE_MODES, index=0, horizontal=True, key=f"mode_{key_suffix}")
+                qsize = st.number_input("Question set size", min_value=1, max_value=chapter["total_questions"], value=int(chapter.get("question_set_size", 10)), key=f"qsize_{key_suffix}")
+                gen_col, action_col = st.columns([2, 1])
+                with gen_col:
+                    if st.button("Generate / Refresh Set", key=f"gen_refresh_{key_suffix}"):
+                        chapter["question_set_size"] = int(qsize)
+                        generated = generate_question_set(chapter)
+                        chapter["last_generated_mode"] = mode
+                        save_data(data)
+                        st.success(f"Generated {len(generated)} questions for {mode}.")
+                with action_col:
+                    if st.button("Clear set", key=f"clearset_{key_suffix}"):
+                        chapter["current_question_set"] = []
+                        save_data(data)
+                        st.success("Cleared current question set.")
 
-                new_size = st.number_input(
-                    "Question set size",
-                    min_value=1,
-                    step=1,
-                    value=safe_default_size,
-                    key=f"qset_size_{chapter_name}",
-                    help="Set size is automatically capped at total questions.",
-                )
-                mode = st.radio("Practice mode", PRACTICE_MODES, horizontal=True)
+                current_set = _normalize_question_list(chapter.get("current_question_set", []), chapter["total_questions"])
+                if current_set:
+                    st.caption("Current question set")
+                    st.write(current_set)
+                    incorrect = st.multiselect("Mark incorrect questions", options=current_set, default=[], key=f"incorrect_{key_suffix}")
+                    if st.button("Log Session", key=f"log_{key_suffix}"):
+                        ok, msg, details = log_practice_session(data, chapter_name, mode, current_set, [int(q) for q in incorrect])
+                        if ok:
+                            st.success(f"{msg} Accuracy: {details['accuracy']}%")
+                            st.experimental_rerun()
+                        else:
+                            st.error(msg)
+                else:
+                    st.info("No question set generated. Use 'Generate / Refresh Set' to create one.")
 
-                if st.button("Generate Question Set"):
-                    chapter["question_set_size"] = max(1, min(int(new_size), total_questions))
-                    generated = generate_question_set(chapter)
-                    chapter["last_generated_mode"] = mode
-                    save_data(data)
-                    st.success(f"Generated {len(generated)} questions for {mode}.")
-                    st.write("Questions:", generated)
-
-                if chapter.get("current_question_set"):
-                    st.caption("Current generated set")
-                    st.write(chapter["current_question_set"])
-
-    # 4) Log Practice
+    # Chapter Manager
     with tabs[3]:
-        if not chapter_names:
-            st.info("Add a chapter first.")
-        else:
-            chapter_name = st.selectbox("Chapter", chapter_names, key="log_chapter")
-            chapter = _find_chapter(data, chapter_name)
-
-            if chapter is None:
-                st.warning("Chapter not found.")
-            else:
-                default_mode = chapter.get("last_generated_mode", "recall_practice")
-                mode = st.radio("Mode", PRACTICE_MODES, index=PRACTICE_MODES.index(default_mode), horizontal=True)
-
-                default_questions = chapter.get("current_question_set", [])
-                manual_questions = st.text_input(
-                    "Question numbers (comma-separated, optional if a set is already generated)",
-                    value=",".join(str(q) for q in default_questions),
-                )
-
-                parsed_questions = []
-                for token in manual_questions.split(","):
-                    token = token.strip()
-                    if not token:
-                        continue
-                    if token.isdigit():
-                        parsed_questions.append(int(token))
-
-                parsed_questions = _normalize_question_list(parsed_questions, chapter["total_questions"])
-
-                incorrect = st.multiselect(
-                    "Incorrect questions",
-                    options=parsed_questions,
-                    default=[],
-                )
-
-                if parsed_questions:
-                    accuracy_preview = round(((len(parsed_questions) - len(incorrect)) / len(parsed_questions)) * 100, 2)
-                    st.caption(f"Computed accuracy: {accuracy_preview}%")
-
-                if st.button("Log Session"):
-                    ok, msg, details = log_practice_session(
-                        data,
-                        chapter_name,
-                        mode,
-                        parsed_questions,
-                        [int(q) for q in incorrect],
-                    )
-                    if ok:
-                        st.success(f"{msg} Accuracy: {details['accuracy']}%")
-                        st.rerun()
-                    else:
-                        st.error(msg)
-
-    # 5) Chapter Manager
-    with tabs[4]:
         if not chapter_names:
             st.info("No chapters yet.")
         else:
             selected = st.selectbox("Select chapter", chapter_names, key="manage_chapter")
             chapter = _find_chapter(data, selected)
-
-            if chapter:
-                tabs = st.tabs([
-                    "Dashboard",
-                    "Add Chapter",
-                    "Generate Practice",
-                    "Log Practice",
-                    "Chapter Manager",
-                ])
-
-                # 1) Dashboard (responsive card-based renderer)
-                with tabs[0]:
-                    _render_dashboard(data, layout_mode)
-                        st.rerun()
+            if chapter is None:
+                st.warning("Chapter not found.")
+            else:
+                st.json({
+                    "chapter_name": chapter["chapter_name"],
+                    "total_questions": chapter["total_questions"],
+                    "next_review_date": chapter["next_review_date"],
+                    "last_review_date": chapter["last_review_date"],
+                    "interval_days": round(float(chapter["interval_days"]), 2),
+                    "ease_factor": round(float(chapter["ease_factor"]), 3),
+                    "repetition_count": chapter["repetition_count"],
+                    "weak_questions_count": len(chapter["weak_questions"]),
+                    "used_questions_count": len(chapter["used_question_numbers"]),
+                })
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button("Clear Current Question Set"):
+                        chapter["current_question_set"] = []
+                        save_data(data)
+                        st.success("Cleared current question set.")
+                        st.experimental_rerun()
+                with c2:
+                    if st.button("Delete Chapter", type="primary"):
+                        data["chapters"] = [c for c in data["chapters"] if c["chapter_name"] != selected]
+                        save_data(data)
+                        st.success("Chapter deleted.")
+                        st.experimental_rerun()
