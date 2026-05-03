@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Tuple
 
 import requests
 import streamlit as st
+import base64
+from typing import Optional
 
 REPO_NAME = "gk_revision_data"
 DATA_PATH = "maths_data.json"
@@ -682,6 +684,13 @@ def main() -> None:
 
         st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
 
+        # subtle accent for cards
+        accent = "#0ea5a4"  # teal-500
+        extra = f"""
+        .card {{ border-left: 4px solid {accent}; padding-left: 12px; }}
+        """
+        st.markdown(f"<style>{extra}</style>", unsafe_allow_html=True)
+
 
     def _render_dashboard(data: Dict[str, Any], layout_mode: str) -> None:
         chapters = data.get("chapters", [])
@@ -730,6 +739,45 @@ def main() -> None:
         for i, chapter in enumerate(ordered):
             col = cols[i % 3]
             render_card(chapter, col)
+
+
+    def _github_headers(token: str) -> Dict[str, str]:
+        return {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+
+
+    def _github_get_contents(repo: str, path: str, branch: str = "main", token: Optional[str] = None) -> Dict[str, Any]:
+        try:
+            import requests
+        except Exception as e:
+            raise RuntimeError("The 'requests' package is required for GitHub Sync.") from e
+        url = f"https://api.github.com/repos/{repo}/contents/{path}?ref={branch}"
+        headers = _github_headers(token) if token else {"Accept": "application/vnd.github.v3+json"}
+        resp = requests.get(url, headers=headers, timeout=15)
+        if resp.status_code == 200:
+            return resp.json()
+        raise RuntimeError(f"GitHub GET failed: {resp.status_code} {resp.text}")
+
+
+    def _github_put_contents(
+        repo: str, path: str, content_text: str, message: str, sha: Optional[str], branch: str = "main", token: Optional[str] = None
+    ) -> Dict[str, Any]:
+        try:
+            import requests
+        except Exception as e:
+            raise RuntimeError("The 'requests' package is required for GitHub Sync.") from e
+        url = f"https://api.github.com/repos/{repo}/contents/{path}"
+        payload = {
+            "message": message,
+            "content": base64.b64encode(content_text.encode("utf-8")).decode("utf-8"),
+            "branch": branch,
+        }
+        if sha:
+            payload["sha"] = sha
+        headers = _github_headers(token) if token else {"Accept": "application/vnd.github.v3+json"}
+        resp = requests.put(url, json=payload, headers=headers, timeout=15)
+        if resp.status_code in (200, 201):
+            return resp.json()
+        raise RuntimeError(f"GitHub PUT failed: {resp.status_code} {resp.text}")
         overdue = [c for c in chapters if _chapter_bucket(c) == "overdue"]
         upcoming = [c for c in chapters if _chapter_bucket(c) == "upcoming"]
 
