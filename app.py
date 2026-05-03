@@ -1,23 +1,21 @@
+from __future__ import annotations
+
 import base64
 import json
 import random
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
-import requests
 import streamlit as st
-import base64
-from typing import Optional
 
 REPO_NAME = "gk_revision_data"
 DATA_PATH = "maths_data.json"
 BRANCH = "main"
+LOCAL_DATA_FILE = Path("maths_data.json")
 PRACTICE_MODES = ["assisted_practice", "recall_practice"]
 
 
-# -----------------------------
-# Persistence helpers
-# -----------------------------
 def _today() -> date:
     return date.today()
 
@@ -30,18 +28,21 @@ def _now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _parse_date(value: str) -> date | None:
+def _parse_date(value: Any) -> Optional[date]:
     if not value:
         return None
+    text = str(value).strip()
     for fmt in ("%Y-%m-%d", "%d-%m-%y"):
         try:
-            return datetime.strptime(value, fmt).date()
+            return datetime.strptime(text, fmt).date()
         except ValueError:
             continue
     return None
 
 
-def _normalize_question_list(values: List[Any], total_questions: int) -> List[int]:
+def _normalize_question_list(values: Any, total_questions: int) -> List[int]:
+    if not isinstance(values, list):
+        return []
     cleaned: List[int] = []
     seen = set()
     for raw in values:
@@ -49,9 +50,7 @@ def _normalize_question_list(values: List[Any], total_questions: int) -> List[in
             number = int(raw)
         except (TypeError, ValueError):
             continue
-        if number < 1 or number > total_questions:
-            continue
-        if number in seen:
+        if number < 1 or number > total_questions or number in seen:
             continue
         seen.add(number)
         cleaned.append(number)
@@ -62,9 +61,20 @@ def _default_data() -> Dict[str, Any]:
     return {"chapters": []}
 
 
-def _get_github_config() -> Tuple[str, str | None]:
-    token = st.secrets.get("GITHUB_TOKEN")
-    owner = st.secrets.get("GITHUB_OWNER", "harshkumar1663")
+def _safe_secrets() -> Dict[str, Any]:
+    try:
+        secrets_obj = st.secrets
+        if hasattr(secrets_obj, "to_dict"):
+            return secrets_obj.to_dict()
+        return dict(secrets_obj)
+    except Exception:
+        return {}
+
+
+def _get_github_config() -> Tuple[str, Optional[str]]:
+    secrets = _safe_secrets()
+    owner = str(secrets.get("GITHUB_OWNER", "harshkumar1663"))
+    token = secrets.get("GITHUB_TOKEN")
     return owner, token
 
 
@@ -72,6 +82,7 @@ def _github_headers(token: str) -> Dict[str, str]:
     return {
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
     }
 
 
@@ -91,144 +102,165 @@ def _default_chapter(name: str, total_questions: int, question_set_size: int) ->
         "used_question_numbers": [],
         "current_question_set": [],
         "question_set_size": size,
-        # Internal helper for optional weak-question removal.
         "question_correct_streak": {},
     }
 
 
 def _ensure_chapter_schema(chapter: Dict[str, Any]) -> None:
     name = str(chapter.get("chapter_name", "")).strip()
-
-    # Backward compatibility: older data uses `sheet_total` instead of `total_questions`.
     legacy_sheet_total = int(chapter.get("sheet_total", 0) or 0)
     total_questions = int(chapter.get("total_questions", 0) or 0)
     if total_questions <= 1 and legacy_sheet_total > 1:
         total_questions = legacy_sheet_total
     total_questions = max(total_questions, 1)
-    size = int(chapter.get("question_set_size", 10) or 10)
 
+    size = int(chapter.get("question_set_size", 10) or 10)
     defaults = _default_chapter(name, total_questions, size)
     for key, value in defaults.items():
-        if key not in chapter:
-            chapter[key] = value
+        chapter.setdefault(key, value)
 
     chapter["chapter_name"] = name
     chapter["total_questions"] = total_questions
     chapter["question_set_size"] = max(1, min(int(chapter.get("question_set_size", 10)), total_questions))
-
-    chapter["interval_days"] = float(chapter.get("interval_days", 1.0) or 1.0)
-    chapter["interval_days"] = max(chapter["interval_days"], 1.0)
-
-    chapter["ease_factor"] = float(chapter.get("ease_factor", 2.5) or 2.5)
-    chapter["ease_factor"] = max(chapter["ease_factor"], 1.3)
-
-    chapter["repetition_count"] = int(chapter.get("repetition_count", 0) or 0)
-    chapter["repetition_count"] = max(chapter["repetition_count"], 0)
-
+    chapter["interval_days"] = max(float(chapter.get("interval_days", 1.0) or 1.0), 1.0)
+    chapter["ease_factor"] = max(float(chapter.get("ease_factor", 2.5) or 2.5), 1.3)
+    chapter["repetition_count"] = max(int(chapter.get("repetition_count", 0) or 0), 0)
     if not isinstance(chapter.get("recall_history"), list):
         chapter["recall_history"] = []
-
     chapter["weak_questions"] = _normalize_question_list(chapter.get("weak_questions", []), total_questions)
     chapter["used_question_numbers"] = _normalize_question_list(chapter.get("used_question_numbers", []), total_questions)
     chapter["current_question_set"] = _normalize_question_list(chapter.get("current_question_set", []), total_questions)
 
-    if not isinstance(chapter.get("question_last_seen"), dict):
-        chapter["question_last_seen"] = {}
-
-    filtered_seen = {}
-    for k, v in chapter["question_last_seen"].items():
+    question_last_seen = chapter.get("question_last_seen", {})
+    if not isinstance(question_last_seen, dict):
+        question_last_seen = {}
+    normalized_seen: Dict[str, str] = {}
+    for key, value in question_last_seen.items():
         try:
-            q = int(k)
+            number = int(key)
         except (TypeError, ValueError):
             continue
-        if 1 <= q <= total_questions:
-            filtered_seen[str(q)] = str(v)
-    chapter["question_last_seen"] = filtered_seen
+        if 1 <= number <= total_questions:
+            normalized_seen[str(number)] = str(value)
+    chapter["question_last_seen"] = normalized_seen
 
     if not isinstance(chapter.get("question_correct_streak"), dict):
         chapter["question_correct_streak"] = {}
 
 
-def load_data() -> Dict[str, Any]:
-    owner, token = _get_github_config()
-    if not token:
-        st.error("Missing GITHUB_TOKEN in Streamlit secrets.")
-        st.stop()
+def _normalize_data(data: Any) -> Dict[str, Any]:
+    if not isinstance(data, dict):
+        data = _default_data()
+    chapters = data.get("chapters", [])
+    if not isinstance(chapters, list):
+        chapters = []
+    data["chapters"] = chapters
+    for chapter in chapters:
+        if isinstance(chapter, dict):
+            _ensure_chapter_schema(chapter)
+    return data
+
+
+def _read_local_data() -> Dict[str, Any]:
+    if not LOCAL_DATA_FILE.exists():
+        return _default_data()
+    try:
+        return _normalize_data(json.loads(LOCAL_DATA_FILE.read_text(encoding="utf-8")))
+    except Exception:
+        return _default_data()
+
+
+def _write_local_data(data: Dict[str, Any]) -> None:
+    LOCAL_DATA_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def _load_from_github(owner: str, token: str) -> Tuple[Dict[str, Any], Optional[str]]:
+    try:
+        import requests
+    except Exception as exc:
+        raise RuntimeError("requests is unavailable") from exc
 
     url = f"https://api.github.com/repos/{owner}/{REPO_NAME}/contents/{DATA_PATH}?ref={BRANCH}"
     response = requests.get(url, headers=_github_headers(token), timeout=20)
+    if response.status_code == 404:
+        return _default_data(), None
+    response.raise_for_status()
+    payload = response.json()
+    encoded = payload.get("content", "")
+    if not encoded:
+        return _default_data(), payload.get("sha")
+    content_text = base64.b64decode(encoded).decode("utf-8")
+    return _normalize_data(json.loads(content_text)), payload.get("sha")
 
-    if response.status_code == 200:
-        # 3) Practice (combined Generate + Log)
-        with tabs[2]:
-            if not chapter_names:
-                st.info("Add a chapter first.")
-            else:
-                chapter_name = st.selectbox("Select chapter", chapter_names, key="practice_chapter")
-                chapter = _find_chapter(data, chapter_name)
-                if chapter is None:
-                    st.warning("Chapter not found.")
-                else:
-                    key_suffix = chapter_name.replace(" ", "_")
-                    default_mode = chapter.get("last_generated_mode", "recall_practice")
-                    mode = st.radio("Practice mode", PRACTICE_MODES, index=PRACTICE_MODES.index(default_mode), horizontal=True, key=f"mode_{key_suffix}")
 
-                    qsize = st.number_input(
-                        "Question set size",
-                        min_value=1,
-                        max_value=chapter["total_questions"],
-                        value=int(chapter.get("question_set_size", 10)),
-                        step=1,
-                        key=f"qsize_{key_suffix}",
-                    )
+def _save_to_github(data: Dict[str, Any], owner: str, token: str, sha: Optional[str]) -> Optional[str]:
+    try:
+        import requests
+    except Exception as exc:
+        raise RuntimeError("requests is unavailable") from exc
 
-                    gen_col, action_col = st.columns([2, 1])
-                    with gen_col:
-                        if st.button("Generate / Refresh Set", key=f"gen_refresh_{key_suffix}"):
-                            chapter["question_set_size"] = int(qsize)
-                            generated = generate_question_set(chapter)
-                            chapter["last_generated_mode"] = mode
-                            save_data(data)
-                            st.success(f"Generated {len(generated)} questions for {mode}.")
-                    with action_col:
-                        if st.button("Clear set", key=f"clearset_{key_suffix}"):
-                            chapter["current_question_set"] = []
-                            save_data(data)
-                            st.success("Cleared current question set.")
+    url = f"https://api.github.com/repos/{owner}/{REPO_NAME}/contents/{DATA_PATH}"
+    payload = {
+        "message": f"Update {DATA_PATH}",
+        "content": base64.b64encode(json.dumps(data, indent=2).encode("utf-8")).decode("utf-8"),
+        "branch": BRANCH,
+    }
+    if sha:
+        payload["sha"] = sha
+    response = requests.put(url, headers=_github_headers(token), json=payload, timeout=20)
+    response.raise_for_status()
+    result = response.json()
+    return result.get("content", {}).get("sha")
 
-                    current_set = _normalize_question_list(chapter.get("current_question_set", []), chapter["total_questions"])
-                    if current_set:
-                        st.caption("Current question set")
-                        st.write(current_set)
-                        incorrect = st.multiselect(
-                            "Mark incorrect questions",
-                            options=current_set,
-                            default=[],
-                            key=f"incorrect_{key_suffix}",
-                        )
-                        if st.button("Log Session", key=f"log_{key_suffix}"):
-                            ok, msg, details = log_practice_session(
-                                data,
-                                chapter_name,
-                                mode,
-                                current_set,
-                                [int(q) for q in incorrect],
-                            )
-                            if ok:
-                                st.success(f"{msg} Accuracy: {details['accuracy']}%")
-                                st.experimental_rerun()
-                            else:
-                                st.error(msg)
-                    else:
-                        st.info("No question set generated. Use 'Generate / Refresh Set' to create one.")
-        if chapter["chapter_name"].lower() == chapter_name.lower():
+
+def load_data() -> Dict[str, Any]:
+    owner, token = _get_github_config()
+    if token:
+        try:
+            data, sha = _load_from_github(owner, token)
+            st.session_state["github_sha"] = sha
+            st.session_state["data_source"] = "github"
+            st.session_state["last_load_status"] = "Loaded from GitHub"
+            st.session_state["last_load_at"] = _now_str()
+            return data
+        except Exception as exc:
+            st.session_state["last_load_status"] = f"GitHub load failed: {exc}"
+            st.session_state["data_source"] = "local-fallback"
+
+    data = _read_local_data()
+    st.session_state["last_load_status"] = "Loaded local data"
+    st.session_state["last_load_at"] = _now_str()
+    return data
+
+
+def save_data(data: Dict[str, Any]) -> None:
+    owner, token = _get_github_config()
+    data = _normalize_data(data)
+    if token:
+        try:
+            sha = st.session_state.get("github_sha")
+            new_sha = _save_to_github(data, owner, token, sha)
+            st.session_state["github_sha"] = new_sha
+            st.session_state["data_source"] = "github"
+            st.session_state["last_save_status"] = "Saved to GitHub"
+            st.session_state["last_save_at"] = _now_str()
+            return
+        except Exception as exc:
+            st.session_state["last_save_status"] = f"GitHub save failed: {exc}"
+            st.session_state["data_source"] = "local-fallback"
+
+    _write_local_data(data)
+    st.session_state["last_save_status"] = "Saved locally"
+    st.session_state["last_save_at"] = _now_str()
+
+
+def _find_chapter(data: Dict[str, Any], chapter_name: str) -> Optional[Dict[str, Any]]:
+    for chapter in data.get("chapters", []):
+        if chapter.get("chapter_name", "").lower() == chapter_name.lower():
             return chapter
     return None
 
 
-# -----------------------------
-# Core required functions
-# -----------------------------
 def create_chapter(
     data: Dict[str, Any],
     chapter_name: str,
@@ -236,110 +268,36 @@ def create_chapter(
     question_set_size: int = 10,
 ) -> Tuple[bool, str]:
     chapter_name = chapter_name.strip()
-    # 5) Chapter Manager (editable cards + confirmations)
-    with tabs[4]:
-        if not chapter_names:
-            st.info("No chapters yet.")
-        else:
-            cols = st.columns([1, 2])
-            with cols[0]:
-                selected = st.selectbox("Select chapter", chapter_names, key="manage_chapter")
-                chapter = _find_chapter(data, selected)
+    if not chapter_name:
+        return False, "Chapter name cannot be empty."
+    if total_questions < 1:
+        return False, "Total questions must be at least 1."
+    if _find_chapter(data, chapter_name):
+        return False, "Chapter already exists."
+    data["chapters"].append(_default_chapter(chapter_name, total_questions, question_set_size))
+    save_data(data)
+    return True, f"Created chapter '{chapter_name}'."
 
-                # Quick actions
-                if chapter:
-                    if st.button("Clear Current Question Set", key=f"clear_{selected}"):
-                        chapter["current_question_set"] = []
-                        save_data(data)
-                        st.success("Cleared current question set.")
-                        st.experimental_rerun()
-                    if st.button("Export Chapter JSON", key=f"export_{selected}"):
-                        st.download_button(
-                            "Download JSON",
-                            data=json.dumps(chapter, indent=2),
-                            file_name=f"{selected.replace(' ', '_')}.json",
-                            mime="application/json",
-                        )
 
-            with cols[1]:
-                chapter = _find_chapter(data, selected)
-                if chapter is None:
-                    st.warning("Chapter not found.")
-                else:
-                    # keys for widgets must be stable; sanitize name for key suffix
-                    key_suffix = selected.replace(" ", "_")
-                    with st.expander("Edit chapter", expanded=True):
-                        new_name = st.text_input("Chapter name", value=chapter["chapter_name"], key=f"name_{key_suffix}")
-                        total_questions = st.number_input(
-                            "Total questions",
-                            min_value=1,
-                            step=1,
-                            value=int(chapter["total_questions"]),
-                            key=f"total_{key_suffix}",
-                        )
-                        question_set_size = st.number_input(
-                            "Question set size",
-                            min_value=1,
-                            step=1,
-                            value=int(chapter.get("question_set_size", 10)),
-                            max_value=int(total_questions),
-                            key=f"size_{key_suffix}",
-                        )
-                        # parse existing date or use today
-                        try:
-                            default_next = _parse_date(chapter.get("next_review_date", "")) or datetime.today().date()
-                        except Exception:
-                            default_next = datetime.today().date()
-                        next_review = st.date_input("Next review date", value=default_next, key=f"next_{key_suffix}")
-                        interval_days = st.number_input(
-                            "Interval days",
-                            min_value=1.0,
-                            value=float(chapter.get("interval_days", 1.0)),
-                            format="%.1f",
-                            key=f"interval_{key_suffix}",
-                        )
-                        ease_factor = st.number_input(
-                            "Ease factor",
-                            min_value=1.0,
-                            value=float(chapter.get("ease_factor", 2.5)),
-                            format="%.2f",
-                            key=f"ease_{key_suffix}",
-                        )
+def _accuracy_to_quality(accuracy: float) -> int:
+    if accuracy >= 90:
+        return 5
+    if accuracy >= 75:
+        return 4
+    if accuracy >= 60:
+        return 3
+    if accuracy >= 40:
+        return 2
+    return 1
 
-                        csave, cdelete = st.columns([1, 1])
-                        with csave:
-                            if st.button("Save changes", key=f"save_{key_suffix}"):
-                                # validation: name non-empty and unique
-                                if not new_name.strip():
-                                    st.error("Chapter name cannot be empty.")
-                                else:
-                                    conflict = _find_chapter(data, new_name.strip())
-                                    if conflict and conflict is not chapter:
-                                        st.error("Another chapter with that name already exists.")
-                                    else:
-                                        chapter["chapter_name"] = new_name.strip()
-                                        chapter["total_questions"] = int(total_questions)
-                                        chapter["question_set_size"] = max(1, min(int(question_set_size), int(total_questions)))
-                                        chapter["next_review_date"] = next_review.isoformat()
-                                        chapter["interval_days"] = float(interval_days)
-                                        chapter["ease_factor"] = float(ease_factor)
-                                        _ensure_chapter_schema(chapter)
-                                        save_data(data)
-                                        st.success("Changes saved.")
-                                        st.experimental_rerun()
 
-                        with cdelete:
-                            if st.button("Delete chapter", key=f"del_{key_suffix}"):
-                                st.session_state[f"confirm_delete_{key_suffix}"] = True
-                            if st.session_state.get(f"confirm_delete_{key_suffix}", False):
-                                st.warning("Confirm deletion — this action cannot be undone.")
-                                if st.button("Confirm delete", key=f"confirm_del_{key_suffix}"):
-                                    data["chapters"] = [c for c in data["chapters"] if c["chapter_name"] != chapter["chapter_name"]]
-                                    save_data(data)
-                                    st.success("Chapter deleted.")
-                                    st.experimental_rerun()
-
-    # Overdue handling: reduce interval 30-50% and slightly reduce ease factor.
+def _apply_overdue_adjustment(chapter: Dict[str, Any], as_of: date) -> bool:
+    next_review = _parse_date(chapter.get("next_review_date", ""))
+    if not next_review:
+        return False
+    overdue_days = (as_of - next_review).days
+    if overdue_days <= 0:
+        return False
     reduction_factor = max(0.5, 0.7 - min(overdue_days, 10) * 0.02)
     chapter["interval_days"] = max(1.0, float(chapter["interval_days"]) * reduction_factor)
     chapter["ease_factor"] = max(1.3, float(chapter["ease_factor"]) - 0.05)
@@ -349,7 +307,6 @@ def create_chapter(
 def update_spaced_repetition(chapter: Dict[str, Any], accuracy: float) -> Dict[str, Any]:
     today = _today()
     quality = _accuracy_to_quality(accuracy)
-
     _apply_overdue_adjustment(chapter, today)
 
     repetition_count = int(chapter["repetition_count"])
@@ -368,17 +325,12 @@ def update_spaced_repetition(chapter: Dict[str, Any], accuracy: float) -> Dict[s
         repetition_count = 0
         interval_days = 1.0
 
-    ease_factor = ease_factor + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02))
-    ease_factor = max(1.3, ease_factor)
-
+    ease_factor = max(1.3, ease_factor + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02)))
     chapter["repetition_count"] = repetition_count
     chapter["interval_days"] = interval_days
     chapter["ease_factor"] = ease_factor
     chapter["last_review_date"] = today.isoformat()
-
-    schedule_days = max(1, int(round(interval_days)))
-    chapter["next_review_date"] = (today + timedelta(days=schedule_days)).isoformat()
-
+    chapter["next_review_date"] = (today + timedelta(days=max(1, int(round(interval_days))))).isoformat()
     chapter["recall_history"].append(
         {
             "date": today.isoformat(),
@@ -389,7 +341,6 @@ def update_spaced_repetition(chapter: Dict[str, Any], accuracy: float) -> Dict[s
             "ease_factor": round(ease_factor, 3),
         }
     )
-
     return chapter
 
 
@@ -400,16 +351,9 @@ def generate_question_set(chapter: Dict[str, Any]) -> List[int]:
     all_questions = list(range(1, total + 1))
     used = set(_normalize_question_list(chapter.get("used_question_numbers", []), total))
     weak = set(_normalize_question_list(chapter.get("weak_questions", []), total))
-
     unseen_pool = [q for q in all_questions if q not in used and q not in weak]
-
     seen_non_weak = [q for q in all_questions if q not in weak]
-    seen_non_weak.sort(
-        key=lambda q: chapter.get("question_last_seen", {}).get(str(q), "1900-01-01T00:00:00")
-    )
-    old_pool = seen_non_weak
-
-    weak_pool = list(weak)
+    seen_non_weak.sort(key=lambda q: chapter.get("question_last_seen", {}).get(str(q), "1900-01-01T00:00:00"))
 
     new_target = round(set_size * 0.5)
     weak_target = round(set_size * 0.3)
@@ -426,33 +370,24 @@ def generate_question_set(chapter: Dict[str, Any]) -> List[int]:
             return available
         return random.sample(available, k)
 
-    # 50% new/unseen
     for q in pick_from(unseen_pool, new_target):
         selected.append(q)
         selected_set.add(q)
-
-    # 30% weak
-    for q in pick_from(weak_pool, weak_target):
+    for q in pick_from(list(weak), weak_target):
         selected.append(q)
         selected_set.add(q)
-
-    # 20% old (not seen recently)
-    for q in pick_from(old_pool, old_target):
+    for q in pick_from(seen_non_weak, old_target):
         selected.append(q)
         selected_set.add(q)
-
     if len(selected) < set_size:
-        remaining_pool = [q for q in all_questions if q not in selected_set]
-        for q in pick_from(remaining_pool, set_size - len(selected)):
+        for q in pick_from(all_questions, set_size - len(selected)):
             selected.append(q)
             selected_set.add(q)
 
     selected = sorted(selected[:set_size])
-
     now_stamp = datetime.now().isoformat(timespec="seconds")
     for q in selected:
         chapter.setdefault("question_last_seen", {})[str(q)] = now_stamp
-
     chapter["current_question_set"] = selected
     return selected
 
@@ -464,10 +399,8 @@ def update_weak_questions(
 ) -> Dict[str, Any]:
     total = int(chapter["total_questions"])
     weak_set = set(_normalize_question_list(chapter.get("weak_questions", []), total))
-
     incorrect = set(_normalize_question_list(incorrect_questions, total))
     correct = set(_normalize_question_list(correct_questions, total))
-
     streak_map = chapter.get("question_correct_streak", {})
     if not isinstance(streak_map, dict):
         streak_map = {}
@@ -475,13 +408,9 @@ def update_weak_questions(
     for q in incorrect:
         weak_set.add(q)
         streak_map[str(q)] = 0
-
     for q in correct:
         key = str(q)
-        prev = int(streak_map.get(key, 0) or 0)
-        streak_map[key] = prev + 1
-
-        # Remove from weak pool after repeated correct recall.
+        streak_map[key] = int(streak_map.get(key, 0) or 0) + 1
         if q in weak_set and streak_map[key] >= 2:
             weak_set.discard(q)
 
@@ -496,11 +425,10 @@ def log_practice_session(
     mode: str,
     question_numbers: List[int],
     incorrect_questions: List[int],
-) -> Tuple[bool, str, Dict[str, Any] | None]:
+) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
     chapter = _find_chapter(data, chapter_name)
     if not chapter:
         return False, "Chapter not found.", None
-
     if mode not in PRACTICE_MODES:
         return False, "Invalid practice mode.", None
 
@@ -509,14 +437,11 @@ def log_practice_session(
     if not asked:
         return False, "No valid question numbers provided.", None
 
-    incorrect = set(_normalize_question_list(incorrect_questions, total))
-    incorrect = {q for q in incorrect if q in asked}
+    incorrect = {q for q in _normalize_question_list(incorrect_questions, total) if q in asked}
     correct = [q for q in asked if q not in incorrect]
-
     accuracy = (len(correct) / len(asked)) * 100.0
 
     update_weak_questions(chapter, list(incorrect), correct)
-
     used_set = set(_normalize_question_list(chapter.get("used_question_numbers", []), total))
     used_set.update(asked)
     chapter["used_question_numbers"] = sorted(used_set)
@@ -532,25 +457,19 @@ def log_practice_session(
     if mode == "recall_practice":
         update_spaced_repetition(chapter, accuracy)
     else:
-        # Assisted practice has weak influence: only slight urgency bump on poor performance.
         if accuracy < 60:
-            current_next = _parse_date(chapter.get("next_review_date", ""))
             tomorrow = _today() + timedelta(days=1)
+            current_next = _parse_date(chapter.get("next_review_date", ""))
             if not current_next or current_next > tomorrow:
                 chapter["next_review_date"] = tomorrow.isoformat()
-
         chapter["recall_history"].append(session_record)
 
     chapter["last_review_date"] = _today_str()
     chapter["current_question_set"] = []
-
     save_data(data)
     return True, "Session logged.", {"accuracy": round(accuracy, 2), "incorrect": sorted(incorrect)}
 
 
-# -----------------------------
-# UI helpers
-# -----------------------------
 def _retention_score(chapter: Dict[str, Any]) -> float:
     recalls = [
         entry["accuracy"]
@@ -584,272 +503,365 @@ def _chapter_bucket(chapter: Dict[str, Any]) -> str:
     return "upcoming"
 
 
-def _chapter_card(chapter: Dict[str, Any]) -> None:
+def _inject_responsive_styles(layout_mode: str) -> None:
+    if layout_mode == "Compact":
+        card_pad = "0.65rem"
+        gap = "0.65rem"
+    elif layout_mode == "Spacious":
+        card_pad = "1.1rem"
+        gap = "1rem"
+    else:
+        card_pad = "clamp(0.75rem, 1.2vw, 1rem)"
+        gap = "clamp(0.75rem, 1.5vw, 1.25rem)"
+
     st.markdown(
         f"""
-**{chapter['chapter_name']}**
-- Next review: {chapter.get('next_review_date', '-')}
-- Interval (days): {round(float(chapter.get('interval_days', 1.0)), 2)}
-- Last accuracy: {_last_accuracy(chapter)}%
-- Retention score (last 5 recalls): {_retention_score(chapter)}%
-"""
+        <style>
+        :root {{
+            --bg: #f7f7f4;
+            --panel: #ffffff;
+            --text: #1f2937;
+            --muted: #6b7280;
+            --accent: #0f766e;
+            --accent-soft: rgba(15, 118, 110, 0.12);
+            --border: rgba(31, 41, 55, 0.08);
+        }}
+
+        .stApp {{
+            background: linear-gradient(180deg, #fbfbf8 0%, #f4f7f5 100%);
+            color: var(--text);
+        }}
+
+        [data-testid="stSidebar"] {{
+            background: #fcfcfb;
+            border-right: 1px solid var(--border);
+        }}
+
+        .chapter-card {{
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-left: 4px solid var(--accent);
+            border-radius: 16px;
+            padding: {card_pad};
+            box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+            margin-bottom: {gap};
+        }}
+
+        .chapter-meta {{
+            color: var(--muted);
+            font-size: 0.92rem;
+        }}
+
+        .chapter-badges {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.45rem;
+            margin-top: 0.65rem;
+        }}
+
+        .badge {{
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            padding: 0.25rem 0.55rem;
+            border-radius: 999px;
+            background: var(--accent-soft);
+            color: var(--accent);
+            font-size: 0.8rem;
+            font-weight: 600;
+        }}
+
+        @media (max-width: 700px) {{
+            .chapter-card {{
+                border-radius: 14px;
+                padding: 0.85rem;
+            }}
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
 
-def _inject_responsive_styles(layout_mode: str = "Auto") -> None:
-    # Light theme base with responsive compact/spacious adjustments.
-    compact_css = """
-    .card { padding: 8px; border-radius: 8px; background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.06); margin-bottom: 12px; }
-    .card h4 { margin: 0 0 6px 0; }
-    .card .meta { color: #6b7280; font-size: 0.9rem; }
-    .card .metrics { margin-top: 6px; }
-    .card .actions { margin-top: 8px; }
-    @media (max-width: 680px) {
-      .card { padding: 6px; font-size: 0.95rem; }
-    }
-    """
 
-    spacious_css = """
-    .card { padding: 16px; border-radius: 10px; background: #ffffff; box-shadow: 0 2px 6px rgba(0,0,0,0.06); margin-bottom: 16px; }
-    .card h4 { margin: 0 0 8px 0; font-size: 1.05rem; }
-    .card .meta { color: #6b7280; font-size: 0.95rem; }
-    .card .metrics { margin-top: 8px; }
-    .card .actions { margin-top: 10px; }
-    @media (max-width: 680px) {
-      .card { padding: 8px; font-size: 0.95rem; }
-    }
-    """
-
-    if layout_mode == "Compact":
-        css = compact_css
-    elif layout_mode == "Spacious":
-        css = spacious_css
-    else:
-        # Auto: use spacious on wide screens, compact on small via media query
-        css = spacious_css + "\n@media (max-width: 680px) { .card { padding: 8px; } }"
-
-    st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
-
-    # subtle accent for cards
-    accent = "#0ea5a4"  # teal-500
-    extra = f"""
-    .card {{ border-left: 4px solid {accent}; padding-left: 12px; }}
-    """
-    st.markdown(f"<style>{extra}</style>", unsafe_allow_html=True)
-
-
-def _render_dashboard(data: Dict[str, Any], layout_mode: str) -> None:
+def _render_dashboard(data: Dict[str, Any]) -> None:
     chapters = data.get("chapters", [])
     due_today = [c for c in chapters if _chapter_bucket(c) == "due_today"]
     overdue = [c for c in chapters if _chapter_bucket(c) == "overdue"]
     upcoming = [c for c in chapters if _chapter_bucket(c) == "upcoming"]
 
-    # Top-level metrics
     c1, c2, c3 = st.columns(3)
     c1.metric("Due Today", len(due_today))
     c2.metric("Overdue", len(overdue))
     c3.metric("Upcoming", len(upcoming))
 
-    st.markdown("---")
+    for title, items in [("Overdue", overdue), ("Due Today", due_today), ("Upcoming", upcoming)]:
+        st.subheader(title)
+        if not items:
+            st.info(f"No {title.lower()} chapters.")
+            continue
+        for chapter in items:
+            st.markdown(
+                f"""
+                <div class="chapter-card">
+                    <h4>{chapter['chapter_name']}</h4>
+                    <div class="chapter-meta">Next review: {chapter.get('next_review_date', '-')} · Interval: {round(float(chapter.get('interval_days', 1.0)), 2)} days</div>
+                    <div class="chapter-badges">
+                        <span class="badge">Accuracy: {_last_accuracy(chapter)}%</span>
+                        <span class="badge">Retention: {_retention_score(chapter)}%</span>
+                        <span class="badge">Weak: {len(chapter.get('weak_questions', []))}</span>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.progress(min(max(_retention_score(chapter) / 100.0, 0.0), 1.0))
 
-    # Cards grid: create 3 columns which will naturally stack on small screens
-    cols = st.columns(3)
 
-    def render_card(chapter: Dict[str, Any], col) -> None:
-        with col:
-            st.markdown(f"<div class='card'><h4>{chapter['chapter_name']}</h4>", unsafe_allow_html=True)
-            st.markdown(f"<div class='meta'>Next review: {chapter.get('next_review_date', '-')} &nbsp;•&nbsp; Interval: {round(float(chapter.get('interval_days',1.0)),2)}d</div></div>", unsafe_allow_html=True)
-            # retention progress
-            retention = _retention_score(chapter)
-            st.progress(min(max(retention / 100.0, 0.0), 1.0))
-            st.write(f"Last accuracy: {_last_accuracy(chapter)}% — Retention (last 5): {retention}%")
-            # quick actions
-            a1, a2 = st.columns([1, 1])
-            with a1:
-                if st.button("Generate", key=f"gen_{chapter['chapter_name']}"):
-                    chapter['question_set_size'] = int(chapter.get('question_set_size', 10))
-                    generated = generate_question_set(chapter)
-                    save_data(data)
-                    st.success(f"Generated {len(generated)} questions")
-            with a2:
-                if st.button("Practice", key=f"prac_{chapter['chapter_name']}"):
-                    st.session_state['last_practice_chapter'] = chapter['chapter_name']
-                    st.info("Selected for practice — switch to 'Generate Practice' tab to proceed")
+def _display_sidebar_sync_status() -> None:
+    owner, token = _get_github_config()
+    st.sidebar.markdown("### GitHub Storage")
+    st.sidebar.caption(f"Repo: {owner}/{REPO_NAME}")
+    st.sidebar.caption(f"Path: {DATA_PATH} ({BRANCH})")
+    st.sidebar.caption(f"Load: {st.session_state.get('last_load_status', 'Not loaded yet')}")
+    st.sidebar.caption(f"Loaded at: {st.session_state.get('last_load_at', '-')}")
+    st.sidebar.caption(f"Save: {st.session_state.get('last_save_status', 'No save yet')}")
+    st.sidebar.caption(f"Saved at: {st.session_state.get('last_save_at', '-')}")
 
-    # show overdue first, then due today, then upcoming
-    ordered = overdue + due_today + upcoming
-    if not ordered:
-        st.info("No chapters found. Add a chapter to get started.")
+    if not token:
+        st.sidebar.info("GITHUB_TOKEN is not configured. The app is using local file fallback.")
+
+    if st.sidebar.button("Reload from GitHub", use_container_width=True):
+        st.session_state["data"] = load_data()
+        st.rerun()
+
+
+def _render_add_chapter_tab(data: Dict[str, Any]) -> None:
+    with st.form("add_chapter_form"):
+        name = st.text_input("Chapter name")
+        total_questions = st.number_input("Total questions", min_value=1, step=1, value=50)
+        question_set_size = st.number_input("Question set size", min_value=1, step=1, value=10)
+        submit = st.form_submit_button("Create Chapter")
+    if submit:
+        ok, msg = create_chapter(data, name, int(total_questions), int(question_set_size))
+        if ok:
+            st.success(msg)
+            st.rerun()
+        else:
+            st.error(msg)
+
+
+def _render_practice_tab(data: Dict[str, Any]) -> None:
+    chapter_names = [c["chapter_name"] for c in data.get("chapters", [])]
+    if not chapter_names:
+        st.info("Add a chapter first.")
         return
 
-    for i, chapter in enumerate(ordered):
-        col = cols[i % 3]
-        render_card(chapter, col)
+    chapter_name = st.selectbox("Select chapter", chapter_names, key="practice_chapter")
+    chapter = _find_chapter(data, chapter_name)
+    if chapter is None:
+        st.warning("Chapter not found.")
+        return
+
+    total_questions = max(1, int(chapter.get("total_questions", 1) or 1))
+    saved_size = int(chapter.get("question_set_size", 10) or 10)
+    safe_default_size = max(1, min(saved_size, total_questions))
+    key_suffix = chapter_name.replace(" ", "_")
+
+    mode = st.radio(
+        "Practice mode",
+        PRACTICE_MODES,
+        horizontal=True,
+        index=0 if chapter.get("last_generated_mode", "recall_practice") == "recall_practice" else 1,
+        key=f"mode_{key_suffix}",
+    )
+    qsize = st.number_input(
+        "Question set size",
+        min_value=1,
+        max_value=total_questions,
+        value=safe_default_size,
+        step=1,
+        key=f"qsize_{key_suffix}",
+    )
+
+    gen_col, clear_col = st.columns([2, 1])
+    with gen_col:
+        if st.button("Generate / Refresh Set", key=f"gen_refresh_{key_suffix}"):
+            chapter["question_set_size"] = int(qsize)
+            generated = generate_question_set(chapter)
+            chapter["last_generated_mode"] = mode
+            save_data(data)
+            st.success(f"Generated {len(generated)} questions for {mode}.")
+            st.rerun()
+    with clear_col:
+        if st.button("Clear set", key=f"clearset_{key_suffix}"):
+            chapter["current_question_set"] = []
+            save_data(data)
+            st.success("Cleared current question set.")
+            st.rerun()
+
+    current_set = _normalize_question_list(chapter.get("current_question_set", []), chapter["total_questions"])
+    if not current_set:
+        st.info("No question set generated. Use 'Generate / Refresh Set' to create one.")
+        return
+
+    st.caption("Current question set")
+    st.write(current_set)
+    incorrect = st.multiselect("Mark incorrect questions", options=current_set, default=[], key=f"incorrect_{key_suffix}")
+    if st.button("Log Session", key=f"log_{key_suffix}"):
+        ok, msg, details = log_practice_session(data, chapter_name, mode, current_set, [int(q) for q in incorrect])
+        if ok:
+            st.success(f"{msg} Accuracy: {details['accuracy']}%")
+            st.rerun()
+        else:
+            st.error(msg)
 
 
-def _github_headers(token: str) -> Dict[str, str]:
-    return {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+def _render_manager_tab(data: Dict[str, Any]) -> None:
+    chapter_names = [c["chapter_name"] for c in data.get("chapters", [])]
+    if not chapter_names:
+        st.info("No chapters yet.")
+        return
+
+    selected = st.selectbox("Select chapter", chapter_names, key="manage_chapter")
+    chapter = _find_chapter(data, selected)
+    if chapter is None:
+        st.warning("Chapter not found.")
+        return
+
+    st.json(
+        {
+            "chapter_name": chapter["chapter_name"],
+            "total_questions": chapter["total_questions"],
+            "next_review_date": chapter["next_review_date"],
+            "last_review_date": chapter["last_review_date"],
+            "interval_days": round(float(chapter["interval_days"]), 2),
+            "ease_factor": round(float(chapter["ease_factor"]), 3),
+            "repetition_count": chapter["repetition_count"],
+            "weak_questions_count": len(chapter["weak_questions"]),
+            "used_questions_count": len(chapter["used_question_numbers"]),
+        }
+    )
+
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Clear Current Question Set"):
+            chapter["current_question_set"] = []
+            save_data(data)
+            st.success("Cleared current question set.")
+            st.rerun()
+    with c2:
+        if st.button("Delete Chapter", type="primary"):
+            data["chapters"] = [c for c in data["chapters"] if c["chapter_name"] != selected]
+            save_data(data)
+            st.success("Chapter deleted.")
+            st.rerun()
+
+    with st.expander("Edit chapter", expanded=True):
+        key_suffix = selected.replace(" ", "_")
+        new_name = st.text_input("Chapter name", value=chapter["chapter_name"], key=f"name_{key_suffix}")
+        total_questions = st.number_input(
+            "Total questions",
+            min_value=1,
+            step=1,
+            value=int(chapter["total_questions"]),
+            key=f"total_{key_suffix}",
+        )
+        question_set_size = st.number_input(
+            "Question set size",
+            min_value=1,
+            step=1,
+            value=int(chapter.get("question_set_size", 10)),
+            max_value=int(total_questions),
+            key=f"size_{key_suffix}",
+        )
+        default_next = _parse_date(chapter.get("next_review_date", "")) or _today()
+        next_review = st.date_input("Next review date", value=default_next, key=f"next_{key_suffix}")
+        interval_days = st.number_input(
+            "Interval days",
+            min_value=1.0,
+            value=float(chapter.get("interval_days", 1.0)),
+            format="%.1f",
+            key=f"interval_{key_suffix}",
+        )
+        ease_factor = st.number_input(
+            "Ease factor",
+            min_value=1.0,
+            value=float(chapter.get("ease_factor", 2.5)),
+            format="%.2f",
+            key=f"ease_{key_suffix}",
+        )
+
+        save_col, delete_col = st.columns([1, 1])
+        with save_col:
+            if st.button("Save changes", key=f"save_{key_suffix}"):
+                if not new_name.strip():
+                    st.error("Chapter name cannot be empty.")
+                elif any(
+                    other is not chapter and other.get("chapter_name", "").lower() == new_name.strip().lower()
+                    for other in data.get("chapters", [])
+                ):
+                    st.error("Another chapter with that name already exists.")
+                else:
+                    chapter["chapter_name"] = new_name.strip()
+                    chapter["total_questions"] = int(total_questions)
+                    chapter["question_set_size"] = max(1, min(int(question_set_size), int(total_questions)))
+                    chapter["next_review_date"] = next_review.isoformat()
+                    chapter["interval_days"] = float(interval_days)
+                    chapter["ease_factor"] = float(ease_factor)
+                    _ensure_chapter_schema(chapter)
+                    save_data(data)
+                    st.success("Changes saved.")
+                    st.rerun()
+        with delete_col:
+            if st.button("Confirm delete", key=f"confirm_del_{key_suffix}"):
+                data["chapters"] = [c for c in data["chapters"] if c["chapter_name"] != chapter["chapter_name"]]
+                save_data(data)
+                st.success("Chapter deleted.")
+                st.rerun()
 
 
-def _github_get_contents(repo: str, path: str, branch: str = "main", token: Optional[str] = None) -> Dict[str, Any]:
-    try:
-        import requests
-    except Exception as e:
-        raise RuntimeError("The 'requests' package is required for GitHub Sync.") from e
-    url = f"https://api.github.com/repos/{repo}/contents/{path}?ref={branch}"
-    headers = _github_headers(token) if token else {"Accept": "application/vnd.github.v3+json"}
-    resp = requests.get(url, headers=headers, timeout=15)
-    if resp.status_code == 200:
-        return resp.json()
-    raise RuntimeError(f"GitHub GET failed: {resp.status_code} {resp.text}")
+def _display_sidebar_sync_status() -> None:
+    owner, token = _get_github_config()
+    st.sidebar.markdown("### GitHub Storage")
+    st.sidebar.caption(f"Repo: {owner}/{REPO_NAME}")
+    st.sidebar.caption(f"Path: {DATA_PATH} ({BRANCH})")
+    st.sidebar.caption(f"Load: {st.session_state.get('last_load_status', 'Not loaded yet')}")
+    st.sidebar.caption(f"Loaded at: {st.session_state.get('last_load_at', '-')}")
+    st.sidebar.caption(f"Save: {st.session_state.get('last_save_status', 'No save yet')}")
+    st.sidebar.caption(f"Saved at: {st.session_state.get('last_save_at', '-')}")
+
+    if not token:
+        st.sidebar.info("GITHUB_TOKEN is not configured. The app is using local file fallback.")
+
+    if st.sidebar.button("Reload from GitHub", use_container_width=True):
+        st.session_state["data"] = load_data()
+        st.rerun()
 
 
-def _github_put_contents(
-    repo: str, path: str, content_text: str, message: str, sha: Optional[str], branch: str = "main", token: Optional[str] = None
-) -> Dict[str, Any]:
-    try:
-        import requests
-    except Exception as e:
-        raise RuntimeError("The 'requests' package is required for GitHub Sync.") from e
-    url = f"https://api.github.com/repos/{repo}/contents/{path}"
-    payload = {
-        "message": message,
-        "content": base64.b64encode(content_text.encode("utf-8")).decode("utf-8"),
-        "branch": branch,
-    }
-    if sha:
-        payload["sha"] = sha
-    headers = _github_headers(token) if token else {"Accept": "application/vnd.github.v3+json"}
-    resp = requests.put(url, json=payload, headers=headers, timeout=15)
-    if resp.status_code in (200, 201):
-        return resp.json()
-    raise RuntimeError(f"GitHub PUT failed: {resp.status_code} {resp.text}")
-
-
-# -----------------------------
-# Streamlit App
-# -----------------------------
 def main() -> None:
     st.set_page_config(page_title="SSC Maths SRS", page_icon="🧠", layout="wide")
     st.title("SSC Maths Spaced Repetition Practice App")
     st.caption("Memory-first engine: spaced repetition, active recall, and mistake reinforcement.")
 
-    # Sidebar: layout and GitHub sync
-    st.sidebar.header("Display")
-    layout_mode = st.sidebar.selectbox("Layout mode", ["Auto", "Compact", "Spacious"], index=0)
-    _inject_responsive_styles(layout_mode)
-
-    owner, token = _get_github_config()
-    with st.sidebar:
-        st.markdown("### GitHub Storage")
-        st.caption(f"Repo: {owner}/{REPO_NAME}")
-        st.caption(f"Path: {DATA_PATH} ({BRANCH})")
-        st.caption(f"Load: {st.session_state.get('last_load_status', 'Not loaded yet')}")
-        st.caption(f"Loaded at: {st.session_state.get('last_load_at', '-')}")
-        st.caption(f"Save: {st.session_state.get('last_save_status', 'No save yet')}")
-        st.caption(f"Saved at: {st.session_state.get('last_save_at', '-')}")
-        if st.button("Reload from GitHub", use_container_width=True):
-            st.session_state["data"] = load_data()
-            st.success("Reloaded latest data from GitHub.")
-            st.experimental_rerun()
-
     if "data" not in st.session_state:
         st.session_state["data"] = load_data()
-    data = st.session_state["data"]
 
+    layout_mode = st.sidebar.selectbox("Layout mode", ["Auto", "Compact", "Spacious"], index=0)
+    _inject_responsive_styles(layout_mode)
+    _display_sidebar_sync_status()
+
+    data = st.session_state["data"]
     tabs = st.tabs(["Dashboard", "Add Chapter", "Practice", "Chapter Manager"])
 
-    # Dashboard
     with tabs[0]:
-        _render_dashboard(data, layout_mode)
-
-    # Add Chapter
+        _render_dashboard(data)
     with tabs[1]:
-        with st.form("add_chapter_form"):
-            name = st.text_input("Chapter name")
-            total_questions = st.number_input("Total questions", min_value=1, step=1, value=50)
-            question_set_size = st.number_input("Question set size", min_value=1, step=1, value=10)
-            submit = st.form_submit_button("Create Chapter")
-        if submit:
-            ok, msg = create_chapter(data, name, int(total_questions), int(question_set_size))
-            if ok:
-                st.success(msg)
-                st.experimental_rerun()
-            else:
-                st.error(msg)
-
-    chapter_names = [c["chapter_name"] for c in data.get("chapters", [])]
-
-    # Practice (generate + log)
+        _render_add_chapter_tab(data)
     with tabs[2]:
-        if not chapter_names:
-            st.info("Add a chapter first.")
-        else:
-            chapter_name = st.selectbox("Select chapter", chapter_names, key="practice_chapter")
-            chapter = _find_chapter(data, chapter_name)
-            if chapter:
-                key_suffix = chapter_name.replace(" ", "_")
-                mode = st.radio("Practice mode", PRACTICE_MODES, index=0, horizontal=True, key=f"mode_{key_suffix}")
-                qsize = st.number_input("Question set size", min_value=1, max_value=chapter["total_questions"], value=int(chapter.get("question_set_size", 10)), key=f"qsize_{key_suffix}")
-                gen_col, action_col = st.columns([2, 1])
-                with gen_col:
-                    if st.button("Generate / Refresh Set", key=f"gen_refresh_{key_suffix}"):
-                        chapter["question_set_size"] = int(qsize)
-                        generated = generate_question_set(chapter)
-                        chapter["last_generated_mode"] = mode
-                        save_data(data)
-                        st.success(f"Generated {len(generated)} questions for {mode}.")
-                with action_col:
-                    if st.button("Clear set", key=f"clearset_{key_suffix}"):
-                        chapter["current_question_set"] = []
-                        save_data(data)
-                        st.success("Cleared current question set.")
-
-                current_set = _normalize_question_list(chapter.get("current_question_set", []), chapter["total_questions"])
-                if current_set:
-                    st.caption("Current question set")
-                    st.write(current_set)
-                    incorrect = st.multiselect("Mark incorrect questions", options=current_set, default=[], key=f"incorrect_{key_suffix}")
-                    if st.button("Log Session", key=f"log_{key_suffix}"):
-                        ok, msg, details = log_practice_session(data, chapter_name, mode, current_set, [int(q) for q in incorrect])
-                        if ok:
-                            st.success(f"{msg} Accuracy: {details['accuracy']}%")
-                            st.experimental_rerun()
-                        else:
-                            st.error(msg)
-                else:
-                    st.info("No question set generated. Use 'Generate / Refresh Set' to create one.")
-
-    # Chapter Manager
+        _render_practice_tab(data)
     with tabs[3]:
-        if not chapter_names:
-            st.info("No chapters yet.")
-        else:
-            selected = st.selectbox("Select chapter", chapter_names, key="manage_chapter")
-            chapter = _find_chapter(data, selected)
-            if chapter is None:
-                st.warning("Chapter not found.")
-            else:
-                st.json({
-                    "chapter_name": chapter["chapter_name"],
-                    "total_questions": chapter["total_questions"],
-                    "next_review_date": chapter["next_review_date"],
-                    "last_review_date": chapter["last_review_date"],
-                    "interval_days": round(float(chapter["interval_days"]), 2),
-                    "ease_factor": round(float(chapter["ease_factor"]), 3),
-                    "repetition_count": chapter["repetition_count"],
-                    "weak_questions_count": len(chapter["weak_questions"]),
-                    "used_questions_count": len(chapter["used_question_numbers"]),
-                })
-                c1, c2 = st.columns(2)
-                with c1:
-                    if st.button("Clear Current Question Set"):
-                        chapter["current_question_set"] = []
-                        save_data(data)
-                        st.success("Cleared current question set.")
-                        st.experimental_rerun()
-                with c2:
-                    if st.button("Delete Chapter", type="primary"):
-                        data["chapters"] = [c for c in data["chapters"] if c["chapter_name"] != selected]
-                        save_data(data)
-                        st.success("Chapter deleted.")
-                        st.experimental_rerun()
+        _render_manager_tab(data)
+
+
+if __name__ == "__main__":
+    main()
