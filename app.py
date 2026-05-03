@@ -6,6 +6,694 @@ from datetime import date, datetime, timedelta
 import requests
 import streamlit as st
 
+# === Config ===
+REPO_NAME = "gk_revision_data"
+DATA_PATH = "maths_data.json"
+BRANCH = "main"
+
+
+def today():
+    return date.today()
+
+
+def today_str():
+    return today().strftime("%d-%m-%y")
+
+
+def parse_date(value):
+    if not value:
+        return None
+    for fmt in ("%d-%m-%y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(value, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def format_date(value):
+    if not value:
+        return "-"
+    if isinstance(value, date):
+        return value.strftime("%d-%m-%y")
+    return str(value)
+
+
+def get_github_config():
+    token = st.secrets.get("GITHUB_TOKEN")
+    owner = st.secrets.get("GITHUB_OWNER", "harshkumar1663")
+    return owner, token
+
+
+def github_headers(token):
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+    }
+
+
+def empty_data():
+    return {"chapters": []}
+
+
+def load_data():
+    owner, token = get_github_config()
+    if not token:
+        st.error("Missing GITHUB_TOKEN in Streamlit secrets.")
+        st.stop()
+    url = f"https://api.github.com/repos/{owner}/{REPO_NAME}/contents/{DATA_PATH}?ref={BRANCH}"
+    response = requests.get(url, headers=github_headers(token), timeout=20)
+    if response.status_code == 200:
+        payload = response.json()
+        content = base64.b64decode(payload["content"]).decode("utf-8")
+        st.session_state["github_sha"] = payload.get("sha")
+        return json.loads(content)
+    if response.status_code == 404:
+        data = empty_data()
+        save_data(data, creating=True)
+        return data
+    st.error(f"GitHub API error: {response.status_code}")
+    st.stop()
+
+
+def save_data(data, creating=False):
+    owner, token = get_github_config()
+    url = f"https://api.github.com/repos/{owner}/{REPO_NAME}/contents/{DATA_PATH}"
+    content = json.dumps(data, indent=2)
+    encoded = base64.b64encode(content.encode("utf-8")).decode("utf-8")
+    payload = {
+        "message": "Update maths_data.json",
+        "content": encoded,
+        "branch": BRANCH,
+    }
+    if not creating:
+        payload["sha"] = st.session_state.get("github_sha")
+    response = requests.put(url, headers=github_headers(token), json=payload, timeout=20)
+    if response.status_code == 409 and not creating:
+        latest_url = f"https://api.github.com/repos/{owner}/{REPO_NAME}/contents/{DATA_PATH}?ref={BRANCH}"
+        latest = requests.get(latest_url, headers=github_headers(token), timeout=20)
+        if latest.status_code == 200:
+            st.session_state["github_sha"] = latest.json().get("sha")
+            payload["sha"] = st.session_state.get("github_sha")
+            response = requests.put(url, headers=github_headers(token), json=payload, timeout=20)
+    if response.status_code in (200, 201):
+        st.session_state["github_sha"] = response.json().get("content", {}).get("sha")
+        st.session_state["data"] = data
+        return
+    st.error(f"Failed to save: {response.status_code}")
+    st.stop()
+
+
+def ensure_chapter_fields(chapter):
+    """Normalize chapter to memory-first model.
+
+    Each chapter becomes a memory entity. Fields added/normalized here:
+    - next_review_date, last_review_date, interval_days, ease_factor
+    - repetition_count, recall_history (list), weak_questions, strong_questions
+    - total_questions (sheet_total), used_question_numbers, question_last_seen
+    - metrics: retention_score, stability_score, weakness_ratio
+    """
+    changed = False
+    defaults = {
+        "chapter_name": "",
+        "subject": "Maths",
+        "total_questions": 0,
+        "used_question_numbers": [],
+        "current_question_set": [],
+        "question_set_size": 15,
+        # Spaced repetition core fields
+        "next_review_date": (today() + timedelta(days=1)).strftime("%d-%m-%y"),
+        "last_review_date": None,
+        "interval_days": 1,
+        "ease_factor": 2.5,
+        "repetition_count": 0,
+        "recall_history": [],  # list of {'date','accuracy','mode'}
+        "weak_questions": [],
+        "strong_questions": [],
+        "question_last_seen": {},  # question_num -> date-str
+        # metrics
+        "retention_score": None,
+        "stability_score": None,
+        "weakness_ratio": 0.0,
+    }
+    for key, value in defaults.items():
+        if key not in chapter:
+            chapter[key] = value
+            changed = True
+
+    # Normalize numeric fields
+    try:
+        tq = int(chapter.get("total_questions", 0) or 0)
+    except (TypeError, ValueError):
+        tq = 0
+    if tq < 0:
+        tq = 0
+    if chapter.get("total_questions") != tq:
+        chapter["total_questions"] = tq
+        changed = True
+
+    try:
+        set_size = int(chapter.get("question_set_size", 15) or 15)
+    except (TypeError, ValueError):
+        set_size = 15
+    set_size = max(1, set_size)
+    if chapter.get("question_set_size") != set_size:
+        chapter["question_set_size"] = set_size
+        changed = True
+
+    # Ensure lists and dicts are proper types
+    if not isinstance(chapter.get("recall_history"), list):
+        chapter["recall_history"] = []
+        changed = True
+    if not isinstance(chapter.get("weak_questions"), list):
+        chapter["weak_questions"] = []
+        changed = True
+    if not isinstance(chapter.get("strong_questions"), list):
+        chapter["strong_questions"] = []
+        changed = True
+    if not isinstance(chapter.get("question_last_seen"), dict):
+        chapter["question_last_seen"] = {}
+        changed = True
+
+    # Clamp EF
+    try:
+        ef = float(chapter.get("ease_factor", 2.5) or 2.5)
+    except (TypeError, ValueError):
+        ef = 2.5
+    ef = max(1.3, ef)
+    if chapter.get("ease_factor") != ef:
+        chapter["ease_factor"] = ef
+        changed = True
+
+    # Ensure interval
+    try:
+        interval = float(chapter.get("interval_days", 1) or 1)
+    except (TypeError, ValueError):
+        interval = 1
+    interval = max(1, interval)
+    if chapter.get("interval_days") != interval:
+        chapter["interval_days"] = interval
+        changed = True
+
+    # compute weakness_ratio metric
+    total_q = max(1, chapter.get("total_questions", 0) or 0)
+    weak_count = len(chapter.get("weak_questions", []))
+    weakness_ratio = round(weak_count / total_q, 3) if total_q > 0 else 0.0
+    if chapter.get("weakness_ratio") != weakness_ratio:
+        chapter["weakness_ratio"] = weakness_ratio
+        changed = True
+
+    return changed
+
+
+def get_chapter(data, name):
+    for chapter in data["chapters"]:
+        if chapter["chapter_name"] == name:
+            return chapter
+    return None
+
+
+def ensure_chapter(data, name):
+    existing = get_chapter(data, name)
+    if existing:
+        ensure_chapter_fields(existing)
+        return existing
+    chapter = {
+        "chapter_name": name,
+        "subject": "Maths",
+        "total_questions": 0,
+    }
+    ensure_chapter_fields(chapter)
+    data["chapters"].append(chapter)
+    return chapter
+
+
+# === Spaced repetition algorithm (SM-2 inspired, simplified) ===
+def accuracy_to_quality(accuracy):
+    if accuracy >= 90:
+        return 5
+    if 75 <= accuracy <= 89:
+        return 4
+    if 60 <= accuracy <= 74:
+        return 3
+    if 40 <= accuracy <= 59:
+        return 2
+    return 1
+
+
+def clamp_ef(ef):
+    return max(1.3, ef)
+
+
+def update_spaced_repetition(chapter, accuracy, mode="recall_practice", wrong_questions=None):
+    """Update chapter SR fields using a simplified SM-2.
+
+    - Only `recall_practice` updates interval_days, repetition_count, and ease_factor fully.
+    - `assisted_practice` reduces penalty for low accuracy and does not strongly change spacing.
+    - `wrong_questions` is a list of question numbers answered incorrectly; used to update weakness profile.
+    """
+    if wrong_questions is None:
+        wrong_questions = []
+    q = accuracy_to_quality(accuracy)
+
+    # Assisted practice reduces penalty: boost low q by 1 (but not above 5)
+    if mode == "assisted_practice" and q < 3:
+        q = min(5, q + 1)
+
+    # Update recall history (keeps rolling record)
+    chapter.setdefault("recall_history", []).append({
+        "date": today_str(),
+        "accuracy": accuracy,
+        "quality": q,
+        "mode": mode,
+    })
+    # Keep only last 50 entries for storage brevity
+    if len(chapter["recall_history"]) > 50:
+        chapter["recall_history"] = chapter["recall_history"][-50:]
+
+    last_ef = float(chapter.get("ease_factor", 2.5) or 2.5)
+    repetition = int(chapter.get("repetition_count", 0) or 0)
+    interval = float(chapter.get("interval_days", 1) or 1)
+
+    if mode != "recall_practice":
+        # Assisted: do not change repetition strongly; update last_review_date only
+        chapter["last_review_date"] = today_str()
+        # small gentle EF tweak for assisted sessions
+        ef = clamp_ef(last_ef + (0.02 if q >= 4 else -0.02))
+        chapter["ease_factor"] = ef
+        # do not update interval or repetition_count substantially
+        return
+
+    # Full recall practice drives spacing
+    # SM-2 EF update formula simplified per spec
+    ef = last_ef + (0.1 - (5 - q) * (0.08 + (5 - q) * 0.02))
+    ef = clamp_ef(ef)
+
+    if q >= 3:
+        repetition += 1
+        if repetition == 1:
+            interval = 1
+        elif repetition == 2:
+            interval = 3
+        else:
+            interval = max(1, round(interval * ef))
+    else:
+        repetition = 0
+        interval = 1
+
+    chapter["repetition_count"] = repetition
+    chapter["interval_days"] = interval
+    chapter["ease_factor"] = ef
+    chapter["last_review_date"] = today_str()
+    chapter["next_review_date"] = (today() + timedelta(days=int(interval))).strftime("%d-%m-%y")
+
+    # Update question-level last seen and weakness profile
+    update_weakness_profile(chapter, wrong_questions)
+
+
+def update_weakness_profile(chapter, wrong_questions):
+    """Update weak_questions, strong_questions, question_last_seen, and metrics.
+
+    - wrong_questions: list of ints.
+    - Questions answered correctly move toward strong_questions.
+    - Track last seen timestamp per question so we can pull 'old' questions.
+    """
+    wrong_set = set(int(x) for x in wrong_questions if isinstance(x, (int, str)) and str(x).isdigit())
+    # mark last seen for any question in recent set if available in current_question_set
+    for q in chapter.get("current_question_set", []):
+        try:
+            num = int(q)
+        except (TypeError, ValueError):
+            continue
+        chapter.setdefault("question_last_seen", {})[str(num)] = today_str()
+
+    # Add wrongs to weak list
+    weak = set(chapter.get("weak_questions", []))
+    strong = set(chapter.get("strong_questions", []))
+    for w in wrong_set:
+        if w > 0 and (chapter.get("total_questions", 0) or 0) >= w:
+            weak.add(w)
+            if w in strong:
+                strong.discard(w)
+
+    # Optionally promote some questions to strong if they've been correct multiple times.
+    # Simple heuristic: if a question was seen and not in wrong_set and not in weak, mark strong.
+    for qk, last in list(chapter.get("question_last_seen", {}).items()):
+        try:
+            qi = int(qk)
+        except (TypeError, ValueError):
+            continue
+        if qi not in weak and qi not in strong:
+            # safe promotion if seen recently and not in weak
+            strong.add(qi)
+
+    chapter["weak_questions"] = sorted(list(weak))
+    chapter["strong_questions"] = sorted(list(strong))
+
+    # Update weakness ratio metric without mutating progress
+    total = max(1, int(chapter.get("total_questions", 0) or 0))
+    chapter["weakness_ratio"] = round(len(chapter.get("weak_questions", [])) / total, 3) if total > 0 else 0.0
+
+
+def handle_overdue(chapter):
+    """If a chapter is overdue, reduce interval_days by 30-50% and slightly reduce EF.
+
+    Does NOT reset progress. Records adjustment in last_review_date.
+    """
+    next_date = parse_date(chapter.get("next_review_date"))
+    if not next_date:
+        return False
+    overdue_days = (today() - next_date).days
+    if overdue_days <= 0:
+        return False
+    # Reduce interval by 30-50%
+    factor = random.uniform(0.5, 0.7)
+    try:
+        interval = float(chapter.get("interval_days", 1) or 1)
+    except (TypeError, ValueError):
+        interval = 1
+    new_interval = max(1, int(round(interval * factor)))
+    chapter["interval_days"] = new_interval
+    # Slightly reduce EF
+    chapter["ease_factor"] = clamp_ef(float(chapter.get("ease_factor", 2.5)) - 0.05)
+    # Schedule next review
+    chapter["next_review_date"] = (today() + timedelta(days=new_interval)).strftime("%d-%m-%y")
+    chapter["last_review_date"] = today_str()
+    return True
+
+
+def sort_chapters(data):
+    data["chapters"] = sorted(data["chapters"], key=lambda c: c["chapter_name"].lower())
+
+
+def retention_score(chapter, window=5):
+    hist = chapter.get("recall_history", [])
+    if not hist:
+        return None
+    last = hist[-window:]
+    avg = sum(x["accuracy"] for x in last) / len(last)
+    return round(avg, 2)
+
+
+def stability_score(chapter):
+    # Simple proxy: longer intervals -> more stable
+    try:
+        interval = float(chapter.get("interval_days", 1) or 1)
+    except (TypeError, ValueError):
+        interval = 1
+    return round(interval, 1)
+
+
+def generate_question_set(chapter):
+    """Generate a question set using the following split:
+    - 50% unseen random
+    - 30% weak_questions
+    - 20% old questions (time-decayed by last_seen)
+    """
+    total = int(chapter.get("total_questions", 0) or 0)
+    if total <= 0:
+        return False, "Set total questions for chapter first."
+    try:
+        set_size = int(chapter.get("question_set_size", 15) or 15)
+    except (TypeError, ValueError):
+        set_size = 15
+    set_size = max(1, min(set_size, total))
+    chapter["question_set_size"] = set_size
+
+    # Pools
+    used = set(int(x) for x in chapter.get("used_question_numbers", []) if str(x).isdigit())
+    all_qs = set(range(1, total + 1))
+    unseen = list(all_qs - used)
+    weak = [int(x) for x in chapter.get("weak_questions", []) if isinstance(x, (int, str)) and str(x).isdigit()]
+    last_seen = chapter.get("question_last_seen", {}) or {}
+
+    selected = []
+    # 50% unseen
+    n_unseen = int(round(set_size * 0.5))
+    if unseen:
+        take = min(n_unseen, len(unseen))
+        selected.extend(random.sample(unseen, take))
+
+    # 30% weak
+    n_weak = int(round(set_size * 0.3))
+    if weak:
+        weak_available = [q for q in weak if q not in selected]
+        take = min(n_weak, len(weak_available))
+        if take:
+            selected.extend(random.sample(weak_available, take))
+
+    # 20% old (time-decayed): choose questions with oldest last_seen or never seen
+    n_old = set_size - len(selected)
+    if n_old > 0:
+        # compute age for each question
+        ages = []
+        for q in all_qs:
+            k = str(q)
+            ls = parse_date(last_seen.get(k))
+            if ls is None:
+                # never seen -> high priority (treat as very old for retention)
+                age_days = 365
+            else:
+                age_days = (today() - ls).days
+            ages.append((age_days, q))
+        ages.sort(reverse=True)
+        candidates = [q for _, q in ages if q not in selected]
+        selected.extend(candidates[:n_old])
+
+    # If we still don't have enough (edge cases), fill randomly
+    if len(selected) < set_size:
+        remaining = [q for q in range(1, total + 1) if q not in selected]
+        if remaining:
+            take = min(set_size - len(selected), len(remaining))
+            selected.extend(random.sample(remaining, take))
+
+    selected = sorted(list(dict.fromkeys(selected)))
+    chapter["current_question_set"] = selected
+    return True, None
+
+
+def render_dashboard(data):
+    st.subheader("Chapter Overview")
+    today_date = today()
+    total = len(data.get("chapters", []))
+    due_today = 0
+    overdue = 0
+
+    for ch in data.get("chapters", []):
+        nr = parse_date(ch.get("next_review_date"))
+        if nr:
+            if nr == today_date:
+                due_today += 1
+            elif nr < today_date:
+                overdue += 1
+        else:
+            # unscheduled is considered due
+            due_today += 1
+
+    cols = st.columns(4)
+    cols[0].metric("Total Chapters", total)
+    cols[1].metric("Due Today", due_today)
+    cols[2].metric("Overdue", overdue)
+    # average retention across chapters
+    ret_vals = [r for r in (retention_score(ch) for ch in data.get("chapters", [])) if r is not None]
+    avg_ret = round(sum(ret_vals) / len(ret_vals), 2) if ret_vals else 0
+    cols[3].metric("Avg Retention", f"{avg_ret}%")
+
+    for ch in data.get("chapters", []):
+        nr = parse_date(ch.get("next_review_date"))
+        last_acc = ch.get("recall_history", [])[-1]["accuracy"] if ch.get("recall_history") else None
+        ret = retention_score(ch)
+        stability = stability_score(ch)
+        weakness = ch.get("weakness_ratio", 0.0)
+
+        overdue_flag = nr and nr < today_date
+        due_flag = nr and nr == today_date
+
+        st.markdown(
+            f"""
+            <div style='border:1px solid #e2e8f0;padding:12px;border-radius:10px;margin-bottom:8px;background:#fff'>
+                <div style='display:flex;justify-content:space-between;align-items:center'>
+                    <div style='font-weight:800'>{ch['chapter_name']}</div>
+                    <div style='text-align:right'>
+                        <div>Next: <strong>{format_date(nr)}</strong></div>
+                        <div>Interval: <strong>{ch.get('interval_days')}d</strong></div>
+                    </div>
+                </div>
+                <div style='margin-top:8px;display:flex;gap:12px'>
+                    <div>Last Accuracy: <strong>{last_acc if last_acc is not None else '-'}</strong></div>
+                    <div>Retention: <strong>{ret if ret is not None else '-'}</strong></div>
+                    <div>Stability: <strong>{stability}</strong></div>
+                    <div>Weakness Ratio: <strong>{weakness}</strong></div>
+                    <div style='margin-left:auto'>{'<span style="color:#b91c1c;">Overdue</span>' if overdue_flag else ('<span style="color:#0369a1;">Due Today</span>' if due_flag else '')}</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+def render_practice_ui(data):
+    st.subheader("Log Practice")
+    if not data.get("chapters"):
+        st.info("Add a chapter first.")
+        return
+
+    chapter_names = [c["chapter_name"] for c in data.get("chapters", [])]
+    chapter_name = st.selectbox("Chapter", chapter_names, key="practice_chapter")
+    chapter = get_chapter(data, chapter_name)
+    if not chapter:
+        st.error("Chapter not found.")
+        return
+
+    mode = st.radio("Practice Mode", ["recall_practice", "assisted_practice"], help="recall_practice updates spacing; assisted_practice reduces penalty and doesn't strongly change spacing.")
+
+    st.markdown(f"**Total Questions:** {chapter.get('total_questions', 0)}")
+    st.markdown(f"**Next Review:** {format_date(parse_date(chapter.get('next_review_date')))}")
+
+    st.markdown("#### Generate Question Set")
+    qs_size = st.number_input("Question set size", min_value=1, max_value=max(1, chapter.get('total_questions', 1)), value=int(chapter.get('question_set_size', 15) or 15), key=f"qsize_{chapter_name}")
+    chapter["question_set_size"] = int(qs_size)
+    if st.button("Generate Practice Set", key=f"gen_{chapter_name}"):
+        ok, msg = generate_question_set(chapter)
+        if not ok:
+            st.error(msg)
+        else:
+            save_data(data)
+            st.success("Practice set generated.")
+            st.rerun()
+
+    current_set = chapter.get("current_question_set", [])
+    if current_set:
+        st.markdown("##### Current Set")
+        st.write(current_set)
+    else:
+        st.info("No current question set. Generate one.")
+
+    st.markdown("#### Log Results")
+    attempted = len(current_set)
+    correct = st.number_input("Correct", min_value=0, max_value=attempted if attempted else 0, value=0 if attempted else 0, step=1, disabled=attempted == 0)
+    wrong_list_txt = st.text_input("Wrong question numbers (comma-separated)", value="", help="Provide specific question numbers that were wrong to update weakness profile.")
+    notes = st.text_area("Notes (optional)")
+    submit = st.button("Log Session")
+    if submit:
+        if attempted == 0:
+            st.error("Generate a question set first.")
+        else:
+            try:
+                wrongs = [int(x.strip()) for x in wrong_list_txt.split(",") if x.strip()]
+            except Exception:
+                wrongs = []
+            accuracy = round((correct / attempted) * 100, 2) if attempted else 0
+            # only recall_practice affects spacing
+            update_spaced_repetition(chapter, accuracy, mode=mode, wrong_questions=wrongs)
+            # record session
+            chapter.setdefault("practice_sessions", []).append({
+                "date": today_str(),
+                "mode": mode,
+                "questions_attempted": attempted,
+                "correct": int(correct),
+                "accuracy": accuracy,
+                "notes": notes.strip() or None,
+            })
+            # mark used questions
+            used = set(int(x) for x in chapter.get("used_question_numbers", []) if str(x).isdigit())
+            used.update([int(x) for x in current_set if isinstance(x, int) or (isinstance(x, str) and x.isdigit())])
+            chapter["used_question_numbers"] = sorted(used)
+            chapter["current_question_set"] = []
+            # update metrics
+            chapter["retention_score"] = retention_score(chapter)
+            chapter["stability_score"] = stability_score(chapter)
+            save_data(data)
+            st.success(f"Logged session. Accuracy: {accuracy}%")
+            st.rerun()
+
+
+def render_chapter_table(data):
+    st.subheader("Chapter Table")
+    if not data.get("chapters"):
+        st.info("No chapters yet.")
+        return
+    headers = ["Chapter", "Total Q", "Next", "Interval", "Last Accuracy", "Retention", "Weakness"]
+    cols = st.columns([2, 1, 1, 1, 1, 1, 1])
+    for c, h in zip(cols, headers):
+        c.markdown(f"**{h}**")
+
+    for ch in data.get("chapters", []):
+        row = st.columns([2, 1, 1, 1, 1, 1, 1])
+        row[0].markdown(ch["chapter_name"])
+        row[1].markdown(str(ch.get("total_questions", 0)))
+        row[2].markdown(format_date(parse_date(ch.get("next_review_date"))))
+        row[3].markdown(f"{ch.get('interval_days')}d")
+        last_acc = ch.get("recall_history", [])[-1]["accuracy"] if ch.get("recall_history") else "-"
+        row[4].markdown(str(last_acc))
+        row[5].markdown(str(ch.get("retention_score") or "-"))
+        row[6].markdown(str(ch.get("weakness_ratio", 0.0)))
+
+
+def main():
+    st.set_page_config(page_title="SSC Maths — Memory-First Practice", layout="wide")
+    st.title("SSC Maths — Memory-First Spaced Repetition")
+
+    if "data" not in st.session_state:
+        st.session_state["data"] = load_data()
+
+    data = st.session_state["data"]
+    updated = False
+
+    for ch in data.get("chapters", []):
+        if ensure_chapter_fields(ch):
+            updated = True
+        # Overdue handling: gentle adjustments, never reset progress
+        if handle_overdue(ch):
+            updated = True
+
+    if updated:
+        sort_chapters(data)
+        save_data(data)
+
+    tabs = st.tabs(["Dashboard", "Log Practice", "Chapter Table", "Add / Edit Chapter"])
+
+    with tabs[0]:
+        render_dashboard(data)
+    with tabs[1]:
+        render_practice_ui(data)
+    with tabs[2]:
+        render_chapter_table(data)
+    with tabs[3]:
+        st.subheader("Add / Edit Chapter")
+        if st.button("➕ Add Chapter"):
+            st.session_state["show_add_chapter"] = True
+        if st.session_state.get("show_add_chapter"):
+            with st.form("add_chap"):
+                name = st.text_input("Chapter name")
+                total_q = st.number_input("Total questions", min_value=0, step=1)
+                submitted = st.form_submit_button("Add")
+                if submitted:
+                    if not name.strip():
+                        st.error("Name required")
+                    elif get_chapter(data, name.strip()):
+                        st.error("Chapter exists")
+                    else:
+                        ch = ensure_chapter(data, name.strip())
+                        ch["total_questions"] = int(total_q)
+                        ensure_chapter_fields(ch)
+                        sort_chapters(data)
+                        save_data(data)
+                        st.success("Chapter added")
+                        st.session_state["show_add_chapter"] = False
+                        st.rerun()
+
+
+if __name__ == "__main__":
+    main()
+import base64
+import json
+import random
+from datetime import date, datetime, timedelta
+
+import requests
+import streamlit as st
+
 REPO_NAME = "gk_revision_data"
 DATA_PATH = "maths_data.json"
 BRANCH = "main"
