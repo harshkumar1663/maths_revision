@@ -419,6 +419,467 @@ def update_weak_questions(
     return chapter
 
 
+def _parse_timestamp(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    text = str(value).strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _chapter_exam_question_pools(chapter: Dict[str, Any]) -> Dict[str, List[int]]:
+    total = max(1, int(chapter.get("total_questions", 1) or 1))
+    all_questions = list(range(1, total + 1))
+    weak_questions = set(_normalize_question_list(chapter.get("weak_questions", []), total))
+    question_last_seen = chapter.get("question_last_seen", {})
+    if not isinstance(question_last_seen, dict):
+        question_last_seen = {}
+
+    weak_pool = [question for question in all_questions if question in weak_questions]
+
+    seen_questions: List[Tuple[datetime, int]] = []
+    unseen_questions: List[int] = []
+    for question in all_questions:
+        if question in weak_questions:
+            continue
+        seen_at = _parse_timestamp(question_last_seen.get(str(question)))
+        if seen_at is None:
+            unseen_questions.append(question)
+        else:
+            seen_questions.append((seen_at, question))
+
+    seen_questions.sort(key=lambda item: (item[0], item[1]))
+    seen_non_weak = [question for _, question in seen_questions]
+    old_count = 0
+    if seen_non_weak:
+        old_count = max(1, round(len(seen_non_weak) * 0.2))
+    old_pool = seen_non_weak[:old_count]
+    normal_pool = [question for question in all_questions if question not in weak_questions and question not in old_pool]
+    normal_pool.extend(unseen_questions)
+
+    normal_pool = sorted(set(normal_pool))
+    old_pool = sorted(
+        set(old_pool),
+        key=lambda question: (_parse_timestamp(question_last_seen.get(str(question))) or datetime.min, question),
+    )
+
+    return {"weak": weak_pool, "normal": normal_pool, "old": old_pool}
+
+
+def _allocate_balanced_counts(total: int, capacities: Dict[str, int], weights: Dict[str, float]) -> Dict[str, int]:
+    total = max(0, int(total))
+    capacities = {key: max(0, int(value)) for key, value in capacities.items()}
+    active_weights = {key: float(weight) for key, weight in weights.items() if capacities.get(key, 0) > 0 and float(weight) > 0}
+    if total == 0 or not active_weights:
+        return {key: 0 for key in capacities}
+
+    remaining_total = min(total, sum(capacities.values()))
+    allocation = {key: 0 for key in capacities}
+    while remaining_total > 0:
+        active = [key for key in capacities if capacities[key] > allocation[key] and active_weights.get(key, 0.0) > 0]
+        if not active:
+            break
+
+        weight_sum = sum(active_weights[key] for key in active)
+        provisional: Dict[str, int] = {}
+        for key in active:
+            share = remaining_total * (active_weights[key] / weight_sum)
+            provisional[key] = min(capacities[key] - allocation[key], int(share))
+
+        assigned = sum(provisional.values())
+        if assigned == 0:
+            best_key = max(active, key=lambda key: (active_weights[key], capacities[key] - allocation[key]))
+            allocation[best_key] += 1
+            remaining_total -= 1
+            continue
+
+        for key, count in provisional.items():
+            allocation[key] += count
+        remaining_total -= assigned
+
+        if remaining_total <= 0:
+            break
+
+        remainders = []
+        for key in active:
+            if capacities[key] <= allocation[key]:
+                continue
+            share = remaining_total * (active_weights[key] / weight_sum)
+            remainders.append((share - int(share), active_weights[key], key))
+        remainders.sort(reverse=True)
+        for _, _, key in remainders:
+            if remaining_total <= 0:
+                break
+            if capacities[key] > allocation[key]:
+                allocation[key] += 1
+                remaining_total -= 1
+
+    return allocation
+
+
+def generate_exam_set(data: Dict[str, Any], selected_chapters: List[str], total_questions: int) -> List[Dict[str, Any]]:
+    selected_names = [str(name).strip() for name in selected_chapters if str(name).strip()]
+    selected_names = list(dict.fromkeys(selected_names))
+    if not selected_names:
+        return []
+
+    chapter_entries: List[Tuple[str, Dict[str, Any], Dict[str, List[int]], int]] = []
+    for chapter_name in selected_names:
+        chapter = _find_chapter(data, chapter_name)
+        if chapter is None:
+            continue
+        pools = _chapter_exam_question_pools(chapter)
+        available = sum(len(pool) for pool in pools.values())
+        if available <= 0:
+            continue
+        chapter_entries.append((chapter_name, chapter, pools, available))
+
+    if not chapter_entries:
+        return []
+
+    requested_total = max(1, int(total_questions))
+    available_total = sum(entry[3] for entry in chapter_entries)
+    target_total = min(requested_total, available_total)
+    chapter_capacities = {chapter_name: available for chapter_name, _, _, available in chapter_entries}
+    chapter_targets = _allocate_balanced_counts(target_total, chapter_capacities, {name: 1.0 for name in chapter_capacities})
+
+    exam_items: List[Dict[str, Any]] = []
+    for chapter_name, chapter, pools, _ in chapter_entries:
+        chapter_target = chapter_targets.get(chapter_name, 0)
+        if chapter_target <= 0:
+            continue
+
+        category_weights = {"weak": 0.4, "normal": 0.4, "old": 0.2}
+        category_capacities = {key: len(pools.get(key, [])) for key in category_weights}
+        category_targets = _allocate_balanced_counts(chapter_target, category_capacities, category_weights)
+
+        selected_numbers: List[Tuple[int, str]] = []
+        for category_name in ("weak", "normal", "old"):
+            available_questions = list(pools.get(category_name, []))
+            if not available_questions:
+                continue
+            count = min(len(available_questions), category_targets.get(category_name, 0))
+            if count <= 0:
+                continue
+            if category_name == "old":
+                chosen_questions = available_questions[:count]
+            else:
+                chosen_questions = random.sample(available_questions, count) if len(available_questions) > count else available_questions
+            for question_number in chosen_questions:
+                selected_numbers.append((question_number, category_name))
+
+        if len(selected_numbers) < chapter_target:
+            already_selected = {question for question, _ in selected_numbers}
+            remaining_questions = [
+                question_number
+                for question_number in range(1, max(1, int(chapter.get("total_questions", 1) or 1)) + 1)
+                if question_number not in already_selected
+            ]
+            random.shuffle(remaining_questions)
+            for question_number in remaining_questions:
+                if len(selected_numbers) >= chapter_target:
+                    break
+                selected_numbers.append((question_number, "normal"))
+
+        for question_number, pool_name in sorted(selected_numbers, key=lambda item: (item[0], item[1])):
+            exam_items.append(
+                {
+                    "chapter_name": chapter_name,
+                    "question_number": question_number,
+                    "question_key": f"{chapter_name}::{question_number}",
+                    "source_pool": pool_name,
+                }
+            )
+
+    if len(exam_items) < target_total:
+        seen_keys = {item["question_key"] for item in exam_items}
+        fallback_items: List[Dict[str, Any]] = []
+        for chapter_name, chapter, _, _ in chapter_entries:
+            total = max(1, int(chapter.get("total_questions", 1) or 1))
+            for question_number in range(1, total + 1):
+                key = f"{chapter_name}::{question_number}"
+                if key in seen_keys:
+                    continue
+                fallback_items.append(
+                    {
+                        "chapter_name": chapter_name,
+                        "question_number": question_number,
+                        "question_key": key,
+                        "source_pool": "normal",
+                    }
+                )
+        random.shuffle(fallback_items)
+        for item in fallback_items:
+            if len(exam_items) >= target_total:
+                break
+            exam_items.append(item)
+
+    unique_exam_items: List[Dict[str, Any]] = []
+    seen_keys = set()
+    for item in exam_items:
+        key = item["question_key"]
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        unique_exam_items.append(item)
+
+    return unique_exam_items[:target_total]
+
+
+def _apply_exam_results(data: Dict[str, Any], exam_questions: List[Dict[str, Any]], incorrect_keys: List[str]) -> None:
+    incorrect_set = set(incorrect_keys)
+
+    chapter_lookup: Dict[str, Dict[str, Any]] = {}
+    for chapter in data.get("chapters", []):
+        if isinstance(chapter, dict):
+            chapter_name = str(chapter.get("chapter_name", "")).strip()
+            if chapter_name:
+                chapter_lookup[chapter_name] = chapter
+
+    per_chapter_incorrect: Dict[str, List[int]] = {}
+    per_chapter_correct: Dict[str, List[int]] = {}
+    for item in exam_questions:
+        chapter_name = item["chapter_name"]
+        question_number = int(item["question_number"])
+        if item["question_key"] in incorrect_set:
+            per_chapter_incorrect.setdefault(chapter_name, []).append(question_number)
+        else:
+            per_chapter_correct.setdefault(chapter_name, []).append(question_number)
+
+    for chapter_name, incorrect_questions in per_chapter_incorrect.items():
+        chapter = chapter_lookup.get(chapter_name)
+        if chapter is None:
+            continue
+        total = max(1, int(chapter.get("total_questions", 1) or 1))
+        weak_set = set(_normalize_question_list(chapter.get("weak_questions", []), total))
+        weak_set.update(_normalize_question_list(incorrect_questions, total))
+        chapter["weak_questions"] = sorted(weak_set)
+        streak_map = chapter.get("question_correct_streak", {})
+        if not isinstance(streak_map, dict):
+            streak_map = {}
+        for question_number in incorrect_questions:
+            streak_map[str(question_number)] = 0
+        chapter["question_correct_streak"] = streak_map
+
+    for chapter_name, correct_questions in per_chapter_correct.items():
+        chapter = chapter_lookup.get(chapter_name)
+        if chapter is None:
+            continue
+        total = max(1, int(chapter.get("total_questions", 1) or 1))
+        streak_map = chapter.get("question_correct_streak", {})
+        if not isinstance(streak_map, dict):
+            streak_map = {}
+        for question_number in _normalize_question_list(correct_questions, total):
+            key = str(question_number)
+            streak_map[key] = int(streak_map.get(key, 0) or 0) + 1
+        chapter["question_correct_streak"] = streak_map
+
+
+def _format_duration(seconds: float) -> str:
+    total_seconds = max(0, int(round(seconds)))
+    minutes, remaining_seconds = divmod(total_seconds, 60)
+    if minutes:
+        return f"{minutes}m {remaining_seconds:02d}s"
+    return f"{remaining_seconds}s"
+
+
+def _init_exam_state() -> None:
+    defaults = {
+        "exam_active": False,
+        "exam_questions": [],
+        "exam_start_time": None,
+        "selected_chapters": [],
+        "exam_time_limit": 30,
+        "exam_question_count": 25,
+        "exam_results": None,
+        "exam_incorrect": [],
+        "exam_submitted": False,
+    }
+    for key, value in defaults.items():
+        st.session_state.setdefault(key, value)
+
+
+def _reset_exam_state() -> None:
+    st.session_state["exam_active"] = False
+    st.session_state["exam_questions"] = []
+    st.session_state["exam_start_time"] = None
+    st.session_state["exam_results"] = None
+    st.session_state["exam_incorrect"] = []
+    st.session_state["exam_submitted"] = False
+
+
+def _render_exam_setup(data: Dict[str, Any]) -> None:
+    chapters = data.get("chapters", [])
+    chapter_names = [str(chapter.get("chapter_name", "")).strip() for chapter in chapters if str(chapter.get("chapter_name", "")).strip()]
+    if not chapter_names:
+        st.info("Add at least one chapter before starting exam practice.")
+        return
+
+    st.markdown(
+        """
+        <div class='app-hero'>
+            <div class='app-hero-title'>Exam practice mode</div>
+            <div class='app-hero-subtitle'>Build a timed mixed-paper from selected chapters. This mode updates weak-question tracking only and does not touch SRS scheduling.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    selected_chapters = st.multiselect(
+        "Select Chapters",
+        options=chapter_names,
+        default=st.session_state.get("selected_chapters", []),
+        key="selected_chapters",
+    )
+    question_count = st.number_input("Question Count", min_value=1, value=int(st.session_state.get("exam_question_count", 25)), step=1)
+    time_limit = st.number_input("Time Limit (minutes)", min_value=1, value=int(st.session_state.get("exam_time_limit", 30)), step=1)
+
+    if st.button("Start Exam", type="primary"):
+        if not selected_chapters:
+            st.error("Select at least one chapter to start the exam.")
+            return
+
+        exam_questions = generate_exam_set(data, selected_chapters, int(question_count))
+        if not exam_questions:
+            st.error("No exam questions are available for the selected chapters.")
+            return
+
+        st.session_state["selected_chapters"] = list(selected_chapters)
+        st.session_state["exam_question_count"] = int(question_count)
+        st.session_state["exam_time_limit"] = int(time_limit)
+        st.session_state["exam_questions"] = exam_questions
+        st.session_state["exam_start_time"] = datetime.now()
+        st.session_state["exam_active"] = True
+        st.session_state["exam_results"] = None
+        st.session_state["exam_incorrect"] = []
+        st.session_state["exam_submitted"] = False
+        st.rerun()
+
+
+def _render_exam_session(data: Dict[str, Any]) -> None:
+    exam_questions = st.session_state.get("exam_questions", [])
+    if not exam_questions:
+        st.warning("No active exam set found.")
+        _reset_exam_state()
+        return
+
+    start_time = st.session_state.get("exam_start_time")
+    if not isinstance(start_time, datetime):
+        st.warning("Exam start time is missing.")
+        _reset_exam_state()
+        return
+
+    time_limit_minutes = max(1, int(st.session_state.get("exam_time_limit", 30) or 30))
+    elapsed_seconds = (datetime.now() - start_time).total_seconds()
+    remaining_seconds = (time_limit_minutes * 60) - elapsed_seconds
+
+    st.markdown(
+        """
+        <div class='app-hero'>
+            <div class='app-hero-title'>Exam session</div>
+            <div class='app-hero-subtitle'>Answer the generated set, mark the questions you got wrong, and submit to view performance metrics.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    metric_cols = st.columns(4)
+    metric_cols[0].markdown(_metric_card("Questions", len(exam_questions), "Generated exam set"), unsafe_allow_html=True)
+    metric_cols[1].markdown(_metric_card("Elapsed", _format_duration(elapsed_seconds), "Timer running"), unsafe_allow_html=True)
+    metric_cols[2].markdown(_metric_card("Time Limit", f"{time_limit_minutes}m", "Configured limit"), unsafe_allow_html=True)
+    metric_cols[3].markdown(_metric_card("Remaining", _format_duration(remaining_seconds), "Negative means overtime"), unsafe_allow_html=True)
+
+    rows = [
+        {"Chapter": item["chapter_name"], "Question": item["question_number"], "Pool": item.get("source_pool", "normal")}
+        for item in exam_questions
+    ]
+    st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    options = [f"{item['chapter_name']} - Q{item['question_number']}" for item in exam_questions]
+    option_to_key = {f"{item['chapter_name']} - Q{item['question_number']}": item["question_key"] for item in exam_questions}
+    incorrect_selected = st.multiselect("Incorrect Questions", options=options, default=st.session_state.get("exam_incorrect", []))
+    st.session_state["exam_incorrect"] = list(incorrect_selected)
+
+    submit_disabled = st.session_state.get("exam_submitted", False)
+    if st.button("Submit Exam", type="primary", disabled=submit_disabled):
+        now = datetime.now()
+        time_taken_seconds = max(0.0, (now - start_time).total_seconds())
+        total = len(exam_questions)
+        incorrect_keys = [option_to_key[label] for label in incorrect_selected if label in option_to_key]
+        incorrect_keys = list(dict.fromkeys(incorrect_keys))
+        correct_count = max(0, total - len(incorrect_keys))
+        accuracy = (correct_count / total * 100.0) if total else 0.0
+        avg_time_per_question = (time_taken_seconds / total) if total else 0.0
+        efficiency_score = (accuracy / avg_time_per_question) if avg_time_per_question > 0 else 0.0
+
+        _apply_exam_results(data, exam_questions, incorrect_keys)
+        save_data(data)
+
+        st.session_state["exam_results"] = {
+            "accuracy": round(accuracy, 2),
+            "time_taken_seconds": round(time_taken_seconds, 2),
+            "avg_time_per_question": round(avg_time_per_question, 2),
+            "efficiency_score": round(efficiency_score, 2),
+            "total_questions": total,
+            "correct_count": correct_count,
+            "incorrect_count": len(incorrect_keys),
+            "submitted_at": now.isoformat(timespec="seconds"),
+        }
+        st.session_state["exam_submitted"] = True
+        st.session_state["exam_active"] = False
+        st.rerun()
+
+    if remaining_seconds < 0:
+        st.warning(f"Time limit exceeded by {_format_duration(abs(remaining_seconds))}.")
+
+
+def _render_exam_results() -> None:
+    exam_results = st.session_state.get("exam_results")
+    if not isinstance(exam_results, dict):
+        return
+
+    st.markdown(
+        """
+        <div class='app-hero'>
+            <div class='app-hero-title'>Exam results</div>
+            <div class='app-hero-subtitle'>Performance summary for the last submitted exam session.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    result_cols = st.columns(4)
+    result_cols[0].markdown(_metric_card("Accuracy", f"{exam_results['accuracy']}%", f"{exam_results['correct_count']} correct / {exam_results['total_questions']} total"), unsafe_allow_html=True)
+    result_cols[1].markdown(_metric_card("Total Time", _format_duration(float(exam_results['time_taken_seconds'])), "Including reading and marking time"), unsafe_allow_html=True)
+    result_cols[2].markdown(_metric_card("Avg / Question", f"{exam_results['avg_time_per_question']}s", "Average per solved item"), unsafe_allow_html=True)
+    result_cols[3].markdown(_metric_card("Efficiency", f"{exam_results['efficiency_score']}", "Accuracy divided by average time"), unsafe_allow_html=True)
+
+    st.success("Exam submitted successfully.")
+    st.caption(f"Submitted at {exam_results['submitted_at']} | Incorrect selected: {exam_results['incorrect_count']}")
+
+    if st.button("Start New Exam"):
+        _reset_exam_state()
+        st.rerun()
+
+
+def _render_exam_mode(data: Dict[str, Any]) -> None:
+    _init_exam_state()
+    if st.session_state.get("exam_active"):
+        _render_exam_session(data)
+        return
+    if isinstance(st.session_state.get("exam_results"), dict):
+        _render_exam_results()
+        return
+    _render_exam_setup(data)
+
+
 def log_practice_session(
     data: Dict[str, Any],
     chapter_name: str,
@@ -1063,6 +1524,22 @@ def _display_sidebar_sync_status() -> None:
 
 def main() -> None:
     st.set_page_config(page_title="SSC Maths SRS", page_icon="🧠", layout="wide")
+    _init_exam_state()
+    mode = st.toggle("Enable Exam Practice Mode", value=False)
+
+    if "data" not in st.session_state:
+        st.session_state["data"] = load_data()
+
+    st.sidebar.markdown("### View")
+    layout_mode = st.sidebar.selectbox("Layout mode", ["Auto", "Compact", "Spacious"], index=0)
+    _inject_responsive_styles(layout_mode)
+    _display_sidebar_sync_status()
+
+    data = st.session_state["data"]
+    if mode:
+        _render_exam_mode(data)
+        return
+
     st.markdown(
         """
         <div class='app-shell'>
@@ -1076,15 +1553,6 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    if "data" not in st.session_state:
-        st.session_state["data"] = load_data()
-
-    st.sidebar.markdown("### View")
-    layout_mode = st.sidebar.selectbox("Layout mode", ["Auto", "Compact", "Spacious"], index=0)
-    _inject_responsive_styles(layout_mode)
-    _display_sidebar_sync_status()
-
-    data = st.session_state["data"]
     tabs = st.tabs(["Dashboard", "Add Chapter", "Practice", "Chapter Manager"])
 
     with tabs[0]:
