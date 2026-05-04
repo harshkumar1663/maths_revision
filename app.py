@@ -1412,19 +1412,19 @@ def _render_manager_tab(data: Dict[str, Any]) -> None:
         st.warning("Chapter not found.")
         return
 
-    st.json(
-        {
-            "chapter_name": chapter["chapter_name"],
-            "total_questions": chapter["total_questions"],
-            "next_review_date": chapter["next_review_date"],
-            "last_review_date": chapter["last_review_date"],
-            "interval_days": round(float(chapter["interval_days"]), 2),
-            "ease_factor": round(float(chapter["ease_factor"]), 3),
-            "repetition_count": chapter["repetition_count"],
-            "weak_questions_count": len(chapter["weak_questions"]),
-            "used_questions_count": len(chapter["used_question_numbers"]),
-        }
-    )
+    # st.json(
+    #     {
+    #         "chapter_name": chapter["chapter_name"],
+    #         "total_questions": chapter["total_questions"],
+    #         "next_review_date": chapter["next_review_date"],
+    #         "last_review_date": chapter["last_review_date"],
+    #         "interval_days": round(float(chapter["interval_days"]), 2),
+    #         "ease_factor": round(float(chapter["ease_factor"]), 3),
+    #         "repetition_count": chapter["repetition_count"],
+    #         "weak_questions_count": len(chapter["weak_questions"]),
+    #         "used_questions_count": len(chapter["used_question_numbers"]),
+    #     }
+    # )
 
     c1, c2 = st.columns(2)
     with c1:
